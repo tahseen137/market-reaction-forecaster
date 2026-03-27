@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{{ page_title }} | Market Reaction Forecaster</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body
+    class="{{ body_class }}"
+    data-page="{{ current_page }}"
+    data-csrf-token="{{ session_status.csrf_token if session_status else '' }}"
+    data-authenticated="{{ 'true' if session_status and session_status.authenticated else 'false' }}"
+  >
+    <header class="topbar">
+      <a class="brand" href="/">Market Reaction Forecaster</a>
+      <nav class="nav">
+        <a href="/pricing">Pricing</a>
+        <a href="/legal">Disclosures</a>
+        {% if current_user %}
+        <a href="/dashboard">Dashboard</a>
+        <a href="/account">Account</a>
+        {% else %}
+        <a href="/login">Log in</a>
+        <a class="nav-cta" href="/signup">Start trial</a>
+        {% endif %}
+      </nav>
+    </header>
+
+    {% block content %}{% endblock %}
+
+    {% block scripts %}{% endblock %}
+  </body>
+</html>

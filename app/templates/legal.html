@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block content %}
+<main class="landing">
+  <section class="panel prose-panel">
+    <p class="eyebrow">Disclosures</p>
+    <h1>Research, not guaranteed outcomes.</h1>
+    <p>
+      Market Reaction Forecaster is a software product that generates model-driven buy, hold, and sell calls.
+      It does not execute trades, custody assets, or guarantee performance.
+    </p>
+    <h2>How to use it</h2>
+    <ul class="bullet-list">
+      <li>Use the product as a structured research input.</li>
+      <li>Review evidence links, event context, and analog sample size before acting.</li>
+      <li>Understand that historical simulations are not promises of future returns.</li>
+    </ul>
+    <h2>What the product does not do</h2>
+    <ul class="bullet-list">
+      <li>No trade placement or brokerage execution.</li>
+      <li>No guarantee that any recommendation will be profitable.</li>
+      <li>No claim that model output is suitable for every investor.</li>
+    </ul>
+    <h2>Market data limitations</h2>
+    <p>
+      Some views may use delayed or sampled data depending on entitlement state and data-provider availability.
+      Recommendation snapshots include model version, benchmark, and evidence status so you can see exactly what informed the output.
+    </p>
+  </section>
+</main>
+{% endblock %}
