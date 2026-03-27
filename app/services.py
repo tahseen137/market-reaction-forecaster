@@ -62,6 +62,117 @@ def _recommendation_query() -> Select[tuple[RecommendationSnapshot]]:
     )
 
 
+def _connector_query() -> Select[tuple[ConnectorState]]:
+    return select(ConnectorState).order_by(ConnectorState.connector_name.asc())
+
+
+def _get_or_create_connector_state(session: Session, connector_name: str) -> ConnectorState:
+    existing = session.scalars(select(ConnectorState).where(ConnectorState.connector_name == connector_name)).first()
+    if existing is not None:
+        return existing
+    connector_state = ConnectorState(connector_name=connector_name, status="idle", metadata_json={})
+    session.add(connector_state)
+    session.commit()
+    session.refresh(connector_state)
+    return connector_state
+
+
+def update_connector_state(
+    session: Session,
+    connector_name: str,
+    *,
+    status: str,
+    metadata: dict[str, object] | None = None,
+    last_polled_at: datetime | None = None,
+    last_cursor: str | None = None,
+) -> ConnectorState:
+    connector_state = _get_or_create_connector_state(session, connector_name)
+    connector_state.status = status
+    connector_state.last_polled_at = last_polled_at or _now()
+    if metadata is not None:
+        connector_state.metadata_json = metadata
+    if last_cursor is not None:
+        connector_state.last_cursor = last_cursor
+    session.add(connector_state)
+    session.commit()
+    session.refresh(connector_state)
+    return connector_state
+
+
+def list_connector_states(session: Session) -> list[ConnectorState]:
+    return list(session.scalars(_connector_query()))
+
+
+def refresh_runtime_connector_states(session: Session, settings: Settings) -> None:
+    update_connector_state(
+        session,
+        "billing",
+        status="configured" if settings.billing_enabled else "unconfigured",
+        metadata={"provider": "stripe", "enabled": settings.billing_enabled},
+    )
+    update_connector_state(
+        session,
+        "password_reset_email",
+        status="configured" if settings.password_reset_email_enabled else "unconfigured",
+        metadata={"provider": "postmark", "enabled": settings.password_reset_email_enabled},
+    )
+    update_connector_state(
+        session,
+        "quote_feed",
+        status="live" if settings.twelve_data_api_key else "fallback",
+        metadata={"provider": "twelve_data", "enabled": bool(settings.twelve_data_api_key)},
+    )
+    update_connector_state(
+        session,
+        "news_feed",
+        status="live" if settings.finnhub_api_key else "limited",
+        metadata={"provider": "finnhub", "enabled": bool(settings.finnhub_api_key)},
+    )
+    update_connector_state(
+        session,
+        "sec_edgar",
+        status="live",
+        metadata={"provider": "sec_edgar", "enabled": True},
+    )
+    update_connector_state(
+        session,
+        "investor_relations_rss",
+        status="live",
+        metadata={"provider": "rss", "enabled": True},
+    )
+    update_connector_state(
+        session,
+        "scheduler",
+        status="enabled" if settings.worker_scheduler_enabled else "disabled",
+        metadata={
+            "timezone": settings.market_refresh_timezone,
+            "hour_local": settings.market_refresh_hour_local,
+            "minute_local": settings.market_refresh_minute_local,
+        },
+    )
+
+
+def build_system_status(session: Session, settings: Settings) -> dict[str, object]:
+    refresh_runtime_connector_states(session, settings)
+    connectors = list_connector_states(session)
+    latest_refresh = next((item.last_polled_at for item in connectors if item.connector_name == "market_refresh"), None)
+    return {
+        "billing_enabled": settings.billing_enabled,
+        "password_reset_email_enabled": settings.password_reset_email_enabled,
+        "scheduler_enabled": settings.worker_scheduler_enabled,
+        "latest_refresh_at": latest_refresh,
+        "connectors": [
+            {
+                "connector_name": item.connector_name,
+                "status": item.status,
+                "last_polled_at": item.last_polled_at,
+                "metadata_json": item.metadata_json,
+            }
+            for item in connectors
+        ],
+    }
+
+
 def _latest_snapshots(session: Session) -> list[RecommendationSnapshot]:
     snapshots = list(
         session.scalars(
@@ -614,15 +725,34 @@ def ingest_candidate_events(session: Session, settings: Settings, security: Secu
 
 
 def refresh_market_state(session: Session, settings: Settings) -> None:
+    started_at = _now()
+    update_connector_state(session, "market_refresh", status="running", metadata={"started_at": started_at.isoformat()}, last_polled_at=started_at)
+    refresh_runtime_connector_states(session, settings)
+    refreshed_symbols: list[str] = []
+    created_events = 0
     for security in list_reference_universe(session):
         refresh_security_quote(session, settings, security)
-        ingest_candidate_events(session, settings, security)
+        created_events += ingest_candidate_events(session, settings, security)
         rebuild_security_recommendation(session, settings, security)
+        refreshed_symbols.append(security.symbol)
     rebuild_all_user_recommendations(session)
-    refresh_backtest(session)
+    backtest = refresh_backtest(session)
+    update_connector_state(
+        session,
+        "market_refresh",
+        status="ok",
+        last_polled_at=_now(),
+        metadata={
+            "started_at": started_at.isoformat(),
+            "refreshed_symbols": refreshed_symbols,
+            "created_events": created_events,
+            "backtest_run_id": backtest.id,
+        },
+    )
 
 
 def seed_demo_content(session: Session, settings: Settings) -> None:
+    refresh_runtime_connector_states(session, settings)
     if session.scalars(select(Event).limit(1)).first():
         return
     now = _now()
@@ -694,4 +824,11 @@ def seed_demo_content(session: Session, settings: Settings) -> None:
     session.commit()
     for security in list_reference_universe(session):
         rebuild_security_recommendation(session, settings, security)
-    refresh_backtest(session)
+    backtest = refresh_backtest(session)
+    update_connector_state(
+        session,
+        "market_refresh",
+        status="seeded",
+        last_polled_at=now,
+        metadata={"seeded_demo_content": True, "backtest_run_id": backtest.id},
+    )

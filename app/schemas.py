@@ -59,6 +59,11 @@ class ResetPasswordRequest(BaseModel):
     password: str = Field(..., min_length=8, max_length=128)
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(..., min_length=8, max_length=128)
+    new_password: str = Field(..., min_length=8, max_length=128)
+
+
 class BillingRequest(BaseModel):
     billing_cycle: BillingCycle
 
@@ -323,3 +328,18 @@ class ActivityEventRead(BaseModel):
     description: str
     details: dict[str, object]
     created_at: datetime
+
+
+class ConnectorStatusRead(BaseModel):
+    connector_name: str
+    status: str
+    last_polled_at: datetime | None
+    metadata_json: dict[str, object]
+
+
+class SystemStatusRead(BaseModel):
+    billing_enabled: bool
+    password_reset_email_enabled: bool
+    scheduler_enabled: bool
+    latest_refresh_at: datetime | None
+    connectors: list[ConnectorStatusRead]

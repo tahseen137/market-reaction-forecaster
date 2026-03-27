@@ -6,8 +6,11 @@ from sqlalchemy.orm import Session
 from app.models import ActivityEvent, User
 
 
-def list_activity_events(session: Session, limit: int = 50) -> list[ActivityEvent]:
-    statement = select(ActivityEvent).order_by(ActivityEvent.created_at.desc()).limit(limit)
+def list_activity_events(session: Session, limit: int = 50, *, actor_user_id: str | None = None) -> list[ActivityEvent]:
+    statement = select(ActivityEvent)
+    if actor_user_id:
+        statement = statement.where(ActivityEvent.actor_user_id == actor_user_id)
+    statement = statement.order_by(ActivityEvent.created_at.desc()).limit(limit)
     return list(session.scalars(statement))
 
 

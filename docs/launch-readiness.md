@@ -6,6 +6,7 @@
 - public sample feed and paid recommendation flows are separate
 - recommendation detail and report export endpoints are live
 - admin market-refresh and manual-event flows are in place
+- account page includes self-serve password change plus live connector and scheduler status
 - commercialization package is included for pricing, deck, and outreach handoff
 
 ## Operational readiness
@@ -14,15 +15,18 @@
 - Alembic migration present
 - Render blueprint present
 - worker config present
+- weekday market refresh scheduler present
 - `.env.example` updated
 - CI enforces tests plus `90%` coverage minimum
 
 ## Quality status
 
-- `20` tests passing
-- `91.54%` Python coverage
+- `25` tests passing
+- `91.94%` Python coverage
 - migration test present
 - worker/task entrypoint test present
+- scheduler config test present
+- password-reset delivery test present
 - Docker image build verified
 - container `/health` and `/ready` smoke checks verified
 
@@ -37,10 +41,12 @@
 - `STRIPE_PRICE_MONTHLY`
 - `STRIPE_PRICE_ANNUAL`
 - `STRIPE_WEBHOOK_SECRET`
+- `POSTMARK_SERVER_TOKEN`
+- `POSTMARK_FROM_EMAIL`
 
 ## Recommended next operator tasks
 
 - configure Stripe products and webhook
-- configure Postmark if transactional email is desired
+- configure Postmark to enable live password-reset email delivery
 - set final bootstrap admin password and rotate after first login
 - connect real data-provider keys before public launch

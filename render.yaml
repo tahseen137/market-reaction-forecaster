@@ -90,7 +90,7 @@ services:
     runtime: docker
     plan: starter
     autoDeployTrigger: commit
-    dockerCommand: celery --app app.tasks worker --loglevel=INFO
+    dockerCommand: celery --app app.tasks worker --beat --loglevel=INFO
     envVars:
       - key: APP_ENV
         value: production
