@@ -9,6 +9,9 @@ services:
   - type: keyvalue
     name: market-reaction-forecaster-redis
     plan: starter
+    ipAllowList:
+      - source: 0.0.0.0/0
+        description: everywhere
 
   - type: web
     name: market-reaction-forecaster
@@ -16,6 +19,9 @@ services:
     plan: starter
     autoDeployTrigger: commit
     healthCheckPath: /health
+    ipAllowList:
+      - source: 0.0.0.0/0
+        description: everywhere
     disk:
       name: market-reaction-forecaster-disk
       mountPath: /var/data
