@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+
+{% block content %}
+<main class="landing">
+  <section class="hero-card">
+    <div class="hero-copy">
+      <p class="eyebrow">Aggressive Consumer Launch</p>
+      <h1>AI-powered buy, hold, and sell calls for the market’s most watched tech names.</h1>
+      <p class="lede">
+        Track event-driven conviction, scenario ranges, analogs, and a model portfolio focused on a frozen large-cap tech universe.
+      </p>
+      <div class="hero-actions">
+        <a class="button primary" href="/signup">Start 7-day trial</a>
+        <a class="button secondary" href="/pricing">See pricing</a>
+      </div>
+    </div>
+    <div class="hero-stats">
+      <div class="stat-card">
+        <span>Universe</span>
+        <strong>Large-cap tech</strong>
+      </div>
+      <div class="stat-card">
+        <span>Benchmark</span>
+        <strong>{{ backtest.benchmark_symbol }}</strong>
+      </div>
+      <div class="stat-card">
+        <span>Sample size</span>
+        <strong>{{ backtest.sample_size }}</strong>
+      </div>
+      <div class="stat-card">
+        <span>Hit rate</span>
+        <strong>{{ "%.0f%%"|format(backtest.hit_rate * 100) }}</strong>
+      </div>
+    </div>
+  </section>
+
+  <section class="section-grid">
+    <article class="panel">
+      <p class="eyebrow">What you get</p>
+      <ul class="bullet-list">
+        <li>Explicit buy, hold, and sell calls with conviction scores.</li>
+        <li>1, 5, and 20 trading-day scenario ranges with invalidation conditions.</li>
+        <li>Event library sourced from SEC filings, newsroom feeds, and manual analyst corrections.</li>
+        <li>Personalized portfolio sizing based on goals, drawdown tolerance, and experience level.</li>
+      </ul>
+    </article>
+    <article class="panel warning-panel">
+      <p class="eyebrow">Important</p>
+      <p class="muted">
+        This software is for research and simulation only. It does not place trades and does not guarantee returns.
+      </p>
+      <a class="text-link" href="/legal">Read the full disclosure set</a>
+    </article>
+  </section>
+
+  <section class="panel">
+    <div class="section-heading">
+      <div>
+        <p class="eyebrow">Delayed sample calls</p>
+        <h2>Preview the style before you subscribe</h2>
+      </div>
+      <a class="text-link" href="/signup">Unlock the full feed</a>
+    </div>
+    <div class="card-grid">
+      {% for item in sample_feed %}
+      <article class="feed-card">
+        <span class="pill {{ item.action }}">{{ item.action|upper }}</span>
+        <h3><a href="/recommendations/{{ item.symbol }}">{{ item.symbol }}</a></h3>
+        <p class="muted">{{ item.latest_headline or item.thesis_summary }}</p>
+        <dl class="mini-metrics">
+          <div><dt>Conviction</dt><dd>{{ item.conviction_score }}/5</dd></div>
+          <div><dt>Confidence</dt><dd>{{ "%.0f%%"|format(item.confidence_score * 100) }}</dd></div>
+          <div><dt>Benchmark</dt><dd>{{ item.benchmark_symbol }}</dd></div>
+        </dl>
+      </article>
+      {% endfor %}
+    </div>
+  </section>
+</main>
+{% endblock %}

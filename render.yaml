@@ -1,0 +1,109 @@
+databases:
+  - name: market-reaction-forecaster-db
+    plan: basic-256mb
+    databaseName: marketreaction
+    user: marketreaction
+    postgresMajorVersion: "16"
+
+services:
+  - type: keyvalue
+    name: market-reaction-forecaster-redis
+    plan: starter
+
+  - type: web
+    name: market-reaction-forecaster
+    runtime: docker
+    plan: starter
+    autoDeployTrigger: commit
+    healthCheckPath: /health
+    disk:
+      name: market-reaction-forecaster-disk
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: SITE_URL
+        value: https://market-reaction-forecaster.onrender.com
+      - key: DATABASE_URL
+        fromDatabase:
+          name: market-reaction-forecaster-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: market-reaction-forecaster-redis
+          property: connectionString
+      - key: BOOTSTRAP_ADMIN_USERNAME
+        value: admin
+      - key: BOOTSTRAP_ADMIN_EMAIL
+        value: admin@example.com
+      - key: BOOTSTRAP_ADMIN_PASSWORD
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: TRUSTED_HOSTS
+        value: "*.onrender.com,localhost,127.0.0.1"
+      - key: ENFORCE_HTTPS
+        value: "true"
+      - key: AUTO_CREATE_SCHEMA
+        value: "false"
+      - key: RUN_DB_MIGRATIONS
+        value: "true"
+      - key: STORAGE_BACKEND
+        value: local
+      - key: UPLOADS_DIR
+        value: /var/data/uploads
+      - key: TWELVE_DATA_API_KEY
+        sync: false
+      - key: FINNHUB_API_KEY
+        sync: false
+      - key: SEC_USER_AGENT
+        value: MarketReactionForecaster/1.0 contact@example.com
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_PUBLISHABLE_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: STRIPE_PRICE_MONTHLY
+        sync: false
+      - key: STRIPE_PRICE_ANNUAL
+        sync: false
+      - key: POSTMARK_SERVER_TOKEN
+        sync: false
+      - key: POSTMARK_FROM_EMAIL
+        value: no-reply@example.com
+      - key: SENTRY_DSN
+        sync: false
+      - key: POSTHOG_API_KEY
+        sync: false
+
+  - type: worker
+    name: market-reaction-forecaster-worker
+    runtime: docker
+    plan: starter
+    autoDeployTrigger: commit
+    dockerCommand: celery --app app.tasks worker --loglevel=INFO
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: market-reaction-forecaster-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: market-reaction-forecaster-redis
+          property: connectionString
+      - key: STORAGE_BACKEND
+        value: local
+      - key: UPLOADS_DIR
+        value: /var/data/uploads
+      - key: TWELVE_DATA_API_KEY
+        sync: false
+      - key: FINNHUB_API_KEY
+        sync: false
+      - key: SEC_USER_AGENT
+        value: MarketReactionForecaster/1.0 contact@example.com

@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+
+{% block content %}
+<main class="landing">
+  <section class="panel pricing-hero">
+    <p class="eyebrow">Subscription</p>
+    <h1>One product. One universe. Fast conviction.</h1>
+    <p class="lede">Start with delayed sample calls, then unlock personalized recommendations, watchlists, backtests, and the model portfolio.</p>
+  </section>
+
+  <section class="pricing-grid">
+    <article class="price-card">
+      <h2>Free</h2>
+      <p class="price">$0</p>
+      <ul class="bullet-list">
+        <li>Public landing pages</li>
+        <li>Delayed sample recommendation feed</li>
+        <li>Benchmark and disclosure access</li>
+      </ul>
+      <a class="button secondary" href="/signup">Create account</a>
+    </article>
+    <article class="price-card featured">
+      <h2>Pro Monthly</h2>
+      <p class="price">$39<span>/mo</span></p>
+      <ul class="bullet-list">
+        <li>Personalized buy, hold, and sell feed</li>
+        <li>Watchlists and account profile tuning</li>
+        <li>Model portfolio and backtest views</li>
+        <li>7-day free trial</li>
+      </ul>
+      {% if current_user %}
+      <button class="button primary checkout-button" data-cycle="monthly" type="button">Start monthly trial</button>
+      {% else %}
+      <a class="button primary" href="/signup">Start trial</a>
+      {% endif %}
+    </article>
+    <article class="price-card">
+      <h2>Pro Annual</h2>
+      <p class="price">$390<span>/yr</span></p>
+      <ul class="bullet-list">
+        <li>Everything in Pro Monthly</li>
+        <li>Annual savings versus monthly billing</li>
+        <li>Priority roadmap feedback access</li>
+      </ul>
+      {% if current_user %}
+      <button class="button secondary checkout-button" data-cycle="annual" type="button">Start annual trial</button>
+      {% else %}
+      <a class="button secondary" href="/signup">Create account</a>
+      {% endif %}
+    </article>
+  </section>
+
+  <section class="panel">
+    <div class="section-heading">
+      <div>
+        <p class="eyebrow">Benchmark view</p>
+        <h2>Sample backtest snapshot</h2>
+      </div>
+      <span class="pill neutral">{{ backtest.universe_version }}</span>
+    </div>
+    <div class="metric-row">
+      <article><span>Hit rate</span><strong>{{ "%.0f%%"|format(backtest.hit_rate * 100) }}</strong></article>
+      <article><span>Win rate</span><strong>{{ "%.0f%%"|format(backtest.win_rate * 100) }}</strong></article>
+      <article><span>Average return</span><strong>{{ "%.2f%%"|format(backtest.average_return) }}</strong></article>
+      <article><span>Max drawdown</span><strong>{{ "%.2f%%"|format(backtest.max_drawdown) }}</strong></article>
+    </div>
+  </section>
+</main>
+{% endblock %}
+
+{% block scripts %}
+{% if current_user %}
+<script src="/static/app.js"></script>
+{% endif %}
+{% endblock %}

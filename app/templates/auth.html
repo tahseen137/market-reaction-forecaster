@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+
+{% block content %}
+<main class="auth-layout">
+  <section class="auth-card panel">
+    {% if mode == "login" %}
+    <p class="eyebrow">Subscriber access</p>
+    <h1>Log in to your account</h1>
+    <p class="muted">Access personalized recommendations, your model portfolio, and billing controls.</p>
+    <form id="login-form" class="stack">
+      <input type="hidden" id="next-path" value="{{ page_data.next_path or '/dashboard' }}" />
+      <label>Username<input id="username" type="text" required autocomplete="username" /></label>
+      <label>Password<input id="password" type="password" required autocomplete="current-password" /></label>
+      <button class="button primary" type="submit">Log in</button>
+    </form>
+    <form id="forgot-password-form" class="stack compact-form">
+      <label>Email for reset link<input id="forgot-email" type="email" required autocomplete="email" /></label>
+      <button class="button secondary" type="submit">Send reset</button>
+    </form>
+    {% else %}
+    <p class="eyebrow">7-day free trial</p>
+    <h1>Create your account</h1>
+    <p class="muted">You’ll start on Pro trial access and can set your investor profile after signup.</p>
+    <form id="signup-form" class="stack">
+      <label>Full name<input id="full-name" type="text" required autocomplete="name" /></label>
+      <label>Username<input id="signup-username" type="text" required autocomplete="username" /></label>
+      <label>Email<input id="signup-email" type="email" required autocomplete="email" /></label>
+      <label>Password<input id="signup-password" type="password" required autocomplete="new-password" /></label>
+      <button class="button primary" type="submit">Start trial</button>
+    </form>
+    {% endif %}
+    <div id="auth-status" class="status-box">Ready.</div>
+  </section>
+</main>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/auth.js"></script>
+{% endblock %}
