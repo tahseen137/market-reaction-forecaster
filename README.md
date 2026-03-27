@@ -1,54 +1,105 @@
 # Market Reaction Forecaster
 
-Market Reaction Forecaster is an MVP blueprint for an event-driven research platform that estimates how markets may react to breaking news, filings, earnings commentary, policy shifts, and competitive moves.
+Market Reaction Forecaster is a production-ready consumer subscription app for explicit AI-powered `buy`, `hold`, and `sell` calls on a frozen large-cap tech universe.
 
-The product combines:
+The launch product is deliberately aggressive:
+- retail-facing
+- premium subscription
+- goals-based personalization
+- event-driven plus daily refresh logic
+- recommendations only, with no brokerage execution
 
-- event ingestion from structured and unstructured sources,
-- simulation-driven reaction modeling inspired by MiroFish,
-- a forecast scoring and calibration layer,
-- and an autoresearch-style model improvement loop for paper-trading and backtest evaluation.
+## What the product does
 
-## MVP outcomes
-
-- Ingest a market-moving event and attach it to a watchlist or ticker.
-- Generate scenario-based forecasts across short and medium horizons.
-- Show confidence, uncertainty drivers, and evidence traces.
-- Track backtest performance and paper portfolio outcomes.
-- Improve scoring logic over time from historical event windows.
+- Public marketing site with delayed sample calls
+- Account signup, login, password reset, session auth, and CSRF protection
+- Trial and subscription state model with Stripe-ready billing hooks
+- Personalized recommendation feed driven by:
+  - event classification
+  - price and momentum context
+  - analog density
+  - risk-profile adjustment
+- Manual event entry plus ingestion adapters for:
+  - SEC EDGAR
+  - Finnhub news
+  - IR/newsroom RSS
+  - Twelve Data quotes
+- Backtest snapshot and model portfolio views
+- Admin user management and market refresh operations
+- Markdown report exports for recommendations and backtests
+- Docker, Alembic, CI, and Render deployment config
 
 ## Repo layout
 
 ```text
 market-reaction-forecaster/
-  apps/
-    api/                 FastAPI starter for the MVP backend
-    web/                 Placeholder for the future Next.js frontend
-  docs/
-    mvp-spec.md
-    architecture.md
-    business-proposal.md
+  app/                  FastAPI app, models, services, templates, static assets
+  alembic/              Database migrations
+  tests/                Unit and integration tests
+  docs/                 Product, business, and launch documentation
+  Dockerfile
+  render.yaml
+  pyproject.toml
 ```
 
 ## Quick start
 
 ```bash
-cd apps/api
 python -m venv .venv
 .venv\Scripts\activate
-pip install -e .
+pip install -e ".[dev]"
+copy .env.example .env
+alembic upgrade head
 uvicorn app.main:app --reload
 ```
 
-Open `http://127.0.0.1:8000/docs` for the API explorer.
+Open [http://127.0.0.1:8000](http://127.0.0.1:8000).
 
-## Docs
+## Environment highlights
 
-- [MVP spec](docs/mvp-spec.md)
-- [Architecture](docs/architecture.md)
-- [Business proposal](docs/business-proposal.md)
+- `BOOTSTRAP_ADMIN_USERNAME`
+- `BOOTSTRAP_ADMIN_PASSWORD`
+- `SESSION_SECRET`
+- `TWELVE_DATA_API_KEY`
+- `FINNHUB_API_KEY`
+- `STRIPE_SECRET_KEY`
+- `STRIPE_PUBLISHABLE_KEY`
+- `STRIPE_PRICE_MONTHLY`
+- `STRIPE_PRICE_ANNUAL`
+- `POSTMARK_SERVER_TOKEN`
+
+See [.env.example](./.env.example) for the full list.
+
+## Tests
+
+```bash
+pytest
+```
+
+The repo is configured to enforce:
+- full unit + integration test execution
+- coverage reporting
+- `90%` minimum coverage in CI
+
+## Deployment
+
+- Local runtime uses `uvicorn` via [start.sh](./start.sh)
+- Production deploy target is Render via [render.yaml](./render.yaml)
+- The blueprint includes:
+  - a web service
+  - a background worker
+  - managed Postgres
+  - managed Redis-compatible key-value storage
+
+## Documentation
+
+- [MVP spec](./docs/mvp-spec.md)
+- [Architecture](./docs/architecture.md)
+- [Business proposal](./docs/business-proposal.md)
+- [Marketing plan](./docs/marketing-plan.md)
+- [Commercialization package](./docs/commercialization-package.md)
+- [Launch readiness](./docs/launch-readiness.md)
 
 ## Important note
 
-This product is designed as a research and decision-support system. It should not be marketed as guaranteed investment advice, and any live deployment needs compliance, data licensing, and risk controls.
-
+This product presents model-driven research software, not guaranteed investment outcomes. It does not place trades, custody assets, or promise returns.

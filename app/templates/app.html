@@ -1,0 +1,215 @@
+{% extends "base.html" %}
+
+{% block content %}
+<main class="app-layout">
+  <aside class="sidebar panel">
+    <p class="eyebrow">Account</p>
+    <h2>{{ current_user.username }}</h2>
+    <p class="muted">{{ current_user.email }}</p>
+    <div class="sidebar-links">
+      <a href="/dashboard">Dashboard</a>
+      <a href="/watchlists">Watchlists</a>
+      <a href="/events">Events</a>
+      <a href="/backtests">Backtests</a>
+      <a href="/paper-portfolio">Model portfolio</a>
+      <a href="/account">Account</a>
+      {% if current_user.role == "admin" %}
+      <a href="/admin/users">Admin</a>
+      {% endif %}
+    </div>
+    <button class="button secondary" id="logout-button" type="button">Log out</button>
+  </aside>
+
+  <section class="content-stack">
+    {% if access_state == "upgrade" %}
+    <section class="panel callout-panel">
+      <h3>Upgrade to unlock the full product</h3>
+      <p class="muted">Personalized recommendation detail, watchlists, backtests, and the model portfolio require active Pro access.</p>
+      <a class="button primary" href="/pricing">See pricing</a>
+    </section>
+    {% elif access_state == "disclosures" %}
+    <section class="panel callout-panel">
+      <h3>Acknowledge the disclosures to continue</h3>
+      <p class="muted">You’re on a paid plan, but full recommendation workflows stay locked until you confirm the research and risk notice.</p>
+      <button class="button primary" id="disclosure-button" type="button">Acknowledge disclosures</button>
+    </section>
+    {% endif %}
+
+    {% if current_page == "dashboard" %}
+    <section class="panel">
+      <p class="eyebrow">Overview</p>
+      <h1>Recommendation dashboard</h1>
+      <div class="metric-row">
+        <article><span>Recommendations</span><strong>{{ dashboard.recommendation_count }}</strong></article>
+        <article><span>Buy</span><strong>{{ dashboard.buy_count }}</strong></article>
+        <article><span>Hold</span><strong>{{ dashboard.hold_count }}</strong></article>
+        <article><span>Sell</span><strong>{{ dashboard.sell_count }}</strong></article>
+        <article><span>Open positions</span><strong>{{ dashboard.open_positions }}</strong></article>
+      </div>
+    </section>
+    <section class="card-grid">
+      {% for item in feed %}
+      <article class="feed-card">
+        <span class="pill {{ item.action }}">{{ item.action|upper }}</span>
+        <h3><a href="/recommendations/{{ item.symbol }}">{{ item.symbol }}</a></h3>
+        <p class="muted">{{ item.thesis_summary }}</p>
+        <dl class="mini-metrics">
+          <div><dt>Conviction</dt><dd>{{ item.conviction_score }}/5</dd></div>
+          <div><dt>Confidence</dt><dd>{{ "%.0f%%"|format(item.confidence_score * 100) }}</dd></div>
+          <div><dt>Profile fit</dt><dd>{{ "%.0f%%"|format((item.profile_fit_score or 0) * 100) if item.profile_fit_score is not none else "n/a" }}</dd></div>
+        </dl>
+      </article>
+      {% endfor %}
+    </section>
+    {% elif current_page == "watchlists" %}
+    <section class="panel">
+      <p class="eyebrow">Lists</p>
+      <h1>Watchlists</h1>
+      <form id="watchlist-form" class="stack compact-form">
+        <label>Name<input id="watchlist-name" type="text" required /></label>
+        <label>Symbols (comma separated)<input id="watchlist-symbols" type="text" placeholder="NVDA, AMD, AAPL" required /></label>
+        <button class="button primary" type="submit">Create watchlist</button>
+      </form>
+    </section>
+    <section class="card-grid">
+      {% for item in watchlists %}
+      <article class="panel">
+        <h3>{{ item.name }}</h3>
+        <p class="muted">{{ item.symbols|join(", ") }}</p>
+      </article>
+      {% endfor %}
+    </section>
+    {% elif current_page == "events" %}
+    <section class="panel"><p class="eyebrow">Market events</p><h1>Event library</h1></section>
+    <section class="card-grid">
+      {% for item in events %}
+      <article class="panel">
+        <span class="pill neutral">{{ item.event_type|replace("_", " ") }}</span>
+        <h3><a href="/events/{{ item.id }}">{{ item.headline }}</a></h3>
+        <p class="muted">{{ item.symbol }} • {{ item.source_label }}</p>
+      </article>
+      {% endfor %}
+    </section>
+    {% elif current_page == "event-detail" %}
+    <section class="panel prose-panel">
+      <p class="eyebrow">{{ event.symbol }}</p>
+      <h1>{{ event.headline }}</h1>
+      <p>{{ event.summary }}</p>
+      <p class="muted">Source: {{ event.source_label }} • {{ event.occurred_at.strftime("%Y-%m-%d %H:%M UTC") }}</p>
+      <p><strong>Thesis:</strong> {{ event.thesis }}</p>
+    </section>
+    {% elif current_page == "recommendation-detail" %}
+    <section class="panel prose-panel">
+      <p class="eyebrow">{{ recommendation.symbol }}</p>
+      <h1>{{ recommendation.action|upper }} with {{ recommendation.conviction_score }}/5 conviction</h1>
+      <p>{{ recommendation.thesis_summary }}</p>
+      <p><strong>Evidence:</strong> {{ recommendation.evidence_summary }}</p>
+      <p><strong>Invalidation:</strong> {{ recommendation.invalidation_conditions }}</p>
+      <div class="metric-row">
+        {% for item in recommendation.horizon_ranges %}
+        <article><span>{{ item.horizon_days }} day</span><strong>{{ "%.2f"|format(item.expected_return_mid) }}%</strong></article>
+        {% endfor %}
+      </div>
+    </section>
+    {% elif current_page == "backtests" %}
+    <section class="panel prose-panel">
+      <p class="eyebrow">Backtest</p>
+      <h1>{{ backtest.scope_label }}</h1>
+      <div class="metric-row">
+        <article><span>Hit rate</span><strong>{{ "%.0f%%"|format(backtest.hit_rate * 100) }}</strong></article>
+        <article><span>Win rate</span><strong>{{ "%.0f%%"|format(backtest.win_rate * 100) }}</strong></article>
+        <article><span>Average return</span><strong>{{ "%.2f%%"|format(backtest.average_return) }}</strong></article>
+        <article><span>Benchmark</span><strong>{{ "%.2f%%"|format(backtest.benchmark_return) }}</strong></article>
+        <article><span>Max drawdown</span><strong>{{ "%.2f%%"|format(backtest.max_drawdown) }}</strong></article>
+      </div>
+    </section>
+    {% elif current_page == "portfolio" %}
+    <section class="panel">
+      <div class="section-heading">
+        <div><p class="eyebrow">Simulation</p><h1>Model portfolio</h1></div>
+        <button class="button secondary" id="rebuild-portfolio-button" type="button">Rebuild</button>
+      </div>
+      <div class="table-card">
+        <table>
+          <thead><tr><th>Symbol</th><th>Status</th><th>Allocation</th><th>PnL</th></tr></thead>
+          <tbody>
+            {% for position in portfolio.positions %}
+            <tr><td>{{ position.symbol }}</td><td>{{ position.status }}</td><td>{{ "%.1f%%"|format(position.allocation_pct) }}</td><td>{{ "%.2f%%"|format(position.pnl_pct) }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+    {% elif current_page == "account" %}
+    <section class="panel">
+      <p class="eyebrow">Account</p>
+      <h1>Profile and billing</h1>
+      <div class="metric-row">
+        <article><span>Plan</span><strong>{{ subscription.plan_key if subscription else "free" }}</strong></article>
+        <article><span>Status</span><strong>{{ subscription.status if subscription else "free" }}</strong></article>
+        <article><span>Role</span><strong>{{ current_user.role }}</strong></article>
+      </div>
+      <form id="profile-form" class="grid-form">
+        <label>Age band<select name="age_band"><option value="25_34">25-34</option><option value="35_44">35-44</option><option value="45_54">45-54</option></select></label>
+        <label>Investable amount<select name="investable_amount_band"><option value="10k_50k">$10k-$50k</option><option value="50k_250k">$50k-$250k</option><option value="250k_1m">$250k-$1m</option></select></label>
+        <label>Goal<select name="goal_primary"><option value="balanced_growth">Balanced growth</option><option value="aggressive_growth">Aggressive growth</option><option value="capital_preservation">Capital preservation</option><option value="income">Income</option></select></label>
+        <label>Risk<select name="risk_tolerance"><option value="balanced">Balanced</option><option value="aggressive">Aggressive</option><option value="conservative">Conservative</option></select></label>
+        <label>Max drawdown<select name="max_drawdown_band"><option value="under_20">Under 20%</option><option value="under_15">Under 15%</option><option value="under_10">Under 10%</option></select></label>
+        <label>Holding period<select name="holding_period_preference"><option value="medium_term">Medium term</option><option value="swing">Swing</option><option value="long_term">Long term</option></select></label>
+        <label>Income stability<select name="income_stability_band"><option value="mostly_stable">Mostly stable</option><option value="stable">Stable</option><option value="variable">Variable</option></select></label>
+        <label>Sector concentration<select name="sector_concentration_tolerance"><option value="medium">Medium</option><option value="high">High</option><option value="low">Low</option></select></label>
+        <label>Experience<select name="experience_level"><option value="intermediate">Intermediate</option><option value="advanced">Advanced</option><option value="beginner">Beginner</option></select></label>
+        <button class="button primary" type="submit">Save profile</button>
+      </form>
+      <div class="button-row">
+        <button class="button secondary checkout-button" data-cycle="monthly" type="button">Start monthly trial</button>
+        <button class="button secondary checkout-button" data-cycle="annual" type="button">Start annual trial</button>
+        <button class="button secondary" id="billing-portal-button" type="button">Billing portal</button>
+      </div>
+    </section>
+    {% elif current_page == "admin-users" %}
+    <section class="panel">
+      <div class="section-heading">
+        <div><p class="eyebrow">Admin</p><h1>Users</h1></div>
+        <button class="button secondary" id="refresh-market-button" type="button">Refresh market</button>
+      </div>
+      <form id="admin-user-form" class="grid-form">
+        <label>Username<input name="username" type="text" required /></label>
+        <label>Email<input name="email" type="email" required /></label>
+        <label>Full name<input name="full_name" type="text" /></label>
+        <label>Password<input name="password" type="password" required /></label>
+        <label>Role<select name="role"><option value="trial_user">Trial user</option><option value="subscriber">Subscriber</option><option value="admin">Admin</option></select></label>
+        <button class="button primary" type="submit">Create user</button>
+      </form>
+      <div class="table-card">
+        <table>
+          <thead><tr><th>Username</th><th>Email</th><th>Role</th><th>Active</th></tr></thead>
+          <tbody>
+            {% for item in users %}
+            <tr><td>{{ item.username }}</td><td>{{ item.email }}</td><td>{{ item.role }}</td><td>{{ "Yes" if item.is_active else "No" }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+    {% endif %}
+
+    {% if activity %}
+    <section class="panel">
+      <p class="eyebrow">Recent activity</p>
+      <div class="activity-list">
+        {% for item in activity %}
+        <article><strong>{{ item.actor_username }}</strong><p class="muted">{{ item.description }}</p></article>
+        {% endfor %}
+      </div>
+    </section>
+    {% endif %}
+
+    <div id="app-status" class="status-box">Ready.</div>
+  </section>
+</main>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/app.js"></script>
+{% endblock %}

@@ -1,156 +1,81 @@
 # Architecture
 
-## Design goals
+## Product shape
 
-- Preserve evidence and calibration, not just narrative output.
-- Keep the first version centered on paper trading and research support.
-- Make every forecast reproducible from stored inputs and model versions.
-- Separate event ingestion, reaction simulation, and forecast scoring.
+Market Reaction Forecaster ships as a FastAPI monolith with server-rendered pages, JSON APIs, background tasks, and a managed Postgres database. The first release is optimized for one thing: fast, consumer-facing large-cap tech recommendation workflows with explicit buy, hold, and sell calls.
 
-## Recommended tech stack
+## Core stack
 
 | Layer | Choice | Why |
 |---|---|---|
-| Frontend | Next.js + TypeScript + Tailwind CSS + TanStack Query + ECharts | Good fit for research dashboards and time-series visualization |
-| API | FastAPI + Pydantic + SQLAlchemy | Typed APIs and strong Python ecosystem fit |
-| Async jobs | Celery + Redis | Handles ingestion, backtests, and forecast generation |
-| Operational store | PostgreSQL | Persists users, forecasts, watchlists, backtest runs, and audit history |
-| Vector retrieval | pgvector | Keeps document retrieval and analog lookup simple |
-| Analytical store | DuckDB + Parquet | Cheap and effective for historical event replays |
-| Object storage | S3 or MinIO | Stores source documents and exported reports |
-| Simulation engine | Python worker with MiroFish-inspired stakeholder world modeling | Models second-order reactions, not just sentiment labels |
-| Forecast engine | Gradient boosting or lightweight neural scorer + prompt-based simulation summaries | Gives both numeric and narrative outputs |
-| Optimization loop | Offline worker inspired by autoresearch | Continuously improves scoring logic on fixed benchmarks |
-| Market data adapters | Pluggable connectors for filings, news, transcripts, and price data vendors | Avoids coupling the product to one data provider |
-| Deployment | Vercel for web, Fly.io or Render for API, Docker workers | Practical for MVP velocity |
+| Web app | FastAPI + Jinja2 + vanilla JS | Fast to ship, low operational complexity, easy SSR |
+| Data layer | SQLAlchemy + Postgres | Strong fit for recommendation snapshots and audit history |
+| Migrations | Alembic | Predictable schema management |
+| Async jobs | Celery + Redis-compatible key-value | Supports polling and recompute jobs |
+| Billing | Stripe Checkout + Billing Portal + webhooks | Consumer subscription flow |
+| Market data | Twelve Data + Finnhub + SEC EDGAR + IR RSS | Low-cost, launch-ready data stack |
+| Deploy | Docker + Render | One repo to live app path |
 
-## High-level architecture
+## Domain model
+
+- `User`
+- `UserProfile`
+- `SubscriptionState`
+- `Security`
+- `Event`
+- `SourceSnapshot`
+- `RecommendationSnapshot`
+- `UserRecommendation`
+- `Watchlist`
+- `PortfolioPosition`
+- `BacktestRun`
+- `ActivityEvent`
+- `ConnectorState`
+
+## Recommendation flow
 
 ```mermaid
 flowchart LR
-    A["Web App"] --> B["API Gateway"]
-    B --> C["Event Service"]
-    B --> D["Forecast Service"]
-    B --> E["Backtest Service"]
-    B --> F["Portfolio Service"]
-    C --> G["PostgreSQL"]
-    C --> H["Object Storage"]
-    C --> I["pgvector"]
-    C --> J["Market Data Connectors"]
-    D --> K["Redis / Celery"]
-    K --> L["Simulation Worker"]
-    K --> M["Forecast Scoring Worker"]
-    L --> I
-    L --> N["LLM Provider"]
-    M --> G
-    E --> O["DuckDB / Parquet"]
-    E --> G
-    F --> G
-    E --> P["Optimization Worker"]
-    P --> O
-    P --> G
+  A["SEC / Finnhub / RSS / Manual Event"] --> B["Normalization & Deduplication"]
+  B --> C["Source Snapshot"]
+  B --> D["Event"]
+  D --> E["Base Recommendation Scorer"]
+  E --> F["Recommendation Snapshot"]
+  F --> G["Profile Personalizer"]
+  G --> H["User Recommendation Feed"]
+  H --> I["Model Portfolio"]
+  F --> J["Backtest Snapshot"]
 ```
 
-## Primary services
+## Runtime behavior
 
-### Event Service
+- Startup seeds the frozen launch universe.
+- Demo content and backtest state are bootstrapped for a usable first-run experience.
+- Quote refresh and event ingestion can be triggered through worker jobs or admin refresh actions.
+- Recommendation snapshots are immutable point-in-time records.
+- Personalized recommendations are regenerated from the latest snapshot set plus the current user profile.
 
-- Ingests raw events from manual entry or connectors.
-- Normalizes and deduplicates events.
-- Builds a structured event package for downstream scoring.
+## Security controls
 
-### Forecast Service
+- Signed session cookies
+- CSRF token validation for mutating authenticated requests
+- login lockouts
+- trusted-host support
+- basic security headers
+- audit activity log
 
-- Creates simulation jobs from each event package.
-- Combines:
-  - simulation outputs,
-  - historical analog retrieval,
-  - price/volume context,
-  - model-generated confidence.
+## Deployment topology
 
-### Backtest Service
+- `web`: FastAPI app and public/subscriber pages
+- `worker`: Celery worker for polling and recompute jobs
+- `postgres`: primary relational store
+- `keyvalue`: Redis-compatible queue/cache backend
 
-- Replays events over historical windows.
-- Computes forecast accuracy, calibration, regime sensitivity, and benchmark comparisons.
+## Design choices
 
-### Portfolio Service
+- No brokerage execution in v1
+- No holdings import in v1
+- No live-trading claims in v1
+- No LLM dependency for the scoring core
 
-- Converts forecasts into paper positions under configurable risk rules.
-- Tracks PnL, hit rate, drawdown, and exposure.
-
-### Optimization Worker
-
-- Uses a fixed benchmark set of historical events.
-- Tunes forecast prompts and lightweight scoring code in an autoresearch-style loop.
-- Keeps only improvements that raise benchmark quality.
-
-## Suggested data model
-
-### Core entities
-
-- `workspace`
-- `watchlist`
-- `security`
-- `event`
-- `event_document`
-- `forecast_run`
-- `forecast_horizon`
-- `paper_position`
-- `backtest_run`
-- `calibration_snapshot`
-
-### Example schema notes
-
-- `event`
-  - id
-  - security_id
-  - event_type
-  - headline
-  - occurred_at
-  - source
-  - thesis_json
-
-- `forecast_run`
-  - id
-  - event_id
-  - direction
-  - confidence_score
-  - uncertainty_notes
-  - created_at
-
-- `forecast_horizon`
-  - id
-  - forecast_run_id
-  - horizon_days
-  - expected_return_low
-  - expected_return_mid
-  - expected_return_high
-
-## API shape
-
-### Primary endpoints
-
-- `POST /v1/events/analyze`
-- `GET /v1/forecasts/{forecast_id}`
-- `GET /v1/backtests/summary`
-- `POST /v1/paper-positions`
-- `GET /v1/watchlists/{watchlist_id}`
-
-## Confidence and risk controls
-
-- Every forecast must show:
-  - probability,
-  - calibration band,
-  - evidence links,
-  - time horizon,
-  - model version.
-- Do not show a single scalar "certainty" without uncertainty notes.
-- Keep live-trading execution out of the MVP.
-
-## MVP architecture decisions
-
-- Start with one or two sectors, not the whole market.
-- Optimize for explainability over model complexity.
-- Use offline improvement loops before enabling any operational automation.
-- Treat premium market data as a later upgrade, not a blocker to early validation.
-
+The architecture keeps the signal path deterministic while still leaving room for optional AI summarization later. That makes the product easier to test, explain, and operate.
