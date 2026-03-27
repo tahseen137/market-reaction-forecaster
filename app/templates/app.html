@@ -30,7 +30,7 @@
     {% elif access_state == "disclosures" %}
     <section class="panel callout-panel">
       <h3>Acknowledge the disclosures to continue</h3>
-      <p class="muted">You’re on a paid plan, but full recommendation workflows stay locked until you confirm the research and risk notice.</p>
+      <p class="muted">You're on a paid plan, but full recommendation workflows stay locked until you confirm the research and risk notice.</p>
       <button class="button primary" id="disclosure-button" type="button">Acknowledge disclosures</button>
     </section>
     {% endif %}
@@ -86,7 +86,7 @@
       <article class="panel">
         <span class="pill neutral">{{ item.event_type|replace("_", " ") }}</span>
         <h3><a href="/events/{{ item.id }}">{{ item.headline }}</a></h3>
-        <p class="muted">{{ item.symbol }} • {{ item.source_label }}</p>
+        <p class="muted">{{ item.symbol }} | {{ item.source_label }}</p>
       </article>
       {% endfor %}
     </section>
@@ -95,7 +95,7 @@
       <p class="eyebrow">{{ event.symbol }}</p>
       <h1>{{ event.headline }}</h1>
       <p>{{ event.summary }}</p>
-      <p class="muted">Source: {{ event.source_label }} • {{ event.occurred_at.strftime("%Y-%m-%d %H:%M UTC") }}</p>
+      <p class="muted">Source: {{ event.source_label }} | {{ event.occurred_at.strftime("%Y-%m-%d %H:%M UTC") }}</p>
       <p><strong>Thesis:</strong> {{ event.thesis }}</p>
     </section>
     {% elif current_page == "recommendation-detail" %}
@@ -143,29 +143,55 @@
     {% elif current_page == "account" %}
     <section class="panel">
       <p class="eyebrow">Account</p>
-      <h1>Profile and billing</h1>
+      <h1>Profile, billing, and system</h1>
       <div class="metric-row">
         <article><span>Plan</span><strong>{{ subscription.plan_key if subscription else "free" }}</strong></article>
         <article><span>Status</span><strong>{{ subscription.status if subscription else "free" }}</strong></article>
         <article><span>Role</span><strong>{{ current_user.role }}</strong></article>
+        <article><span>Scheduler</span><strong>{{ "On" if system_status.scheduler_enabled else "Off" }}</strong></article>
       </div>
       <form id="profile-form" class="grid-form">
-        <label>Age band<select name="age_band"><option value="25_34">25-34</option><option value="35_44">35-44</option><option value="45_54">45-54</option></select></label>
-        <label>Investable amount<select name="investable_amount_band"><option value="10k_50k">$10k-$50k</option><option value="50k_250k">$50k-$250k</option><option value="250k_1m">$250k-$1m</option></select></label>
-        <label>Goal<select name="goal_primary"><option value="balanced_growth">Balanced growth</option><option value="aggressive_growth">Aggressive growth</option><option value="capital_preservation">Capital preservation</option><option value="income">Income</option></select></label>
-        <label>Risk<select name="risk_tolerance"><option value="balanced">Balanced</option><option value="aggressive">Aggressive</option><option value="conservative">Conservative</option></select></label>
-        <label>Max drawdown<select name="max_drawdown_band"><option value="under_20">Under 20%</option><option value="under_15">Under 15%</option><option value="under_10">Under 10%</option></select></label>
-        <label>Holding period<select name="holding_period_preference"><option value="medium_term">Medium term</option><option value="swing">Swing</option><option value="long_term">Long term</option></select></label>
-        <label>Income stability<select name="income_stability_band"><option value="mostly_stable">Mostly stable</option><option value="stable">Stable</option><option value="variable">Variable</option></select></label>
-        <label>Sector concentration<select name="sector_concentration_tolerance"><option value="medium">Medium</option><option value="high">High</option><option value="low">Low</option></select></label>
-        <label>Experience<select name="experience_level"><option value="intermediate">Intermediate</option><option value="advanced">Advanced</option><option value="beginner">Beginner</option></select></label>
+        <label>Age band<select name="age_band"><option value="18_24" {% if profile and profile.age_band == "18_24" %}selected{% endif %}>18-24</option><option value="25_34" {% if profile and profile.age_band == "25_34" %}selected{% endif %}>25-34</option><option value="35_44" {% if profile and profile.age_band == "35_44" %}selected{% endif %}>35-44</option><option value="45_54" {% if profile and profile.age_band == "45_54" %}selected{% endif %}>45-54</option><option value="55_64" {% if profile and profile.age_band == "55_64" %}selected{% endif %}>55-64</option><option value="65_plus" {% if profile and profile.age_band == "65_plus" %}selected{% endif %}>65+</option></select></label>
+        <label>Investable amount<select name="investable_amount_band"><option value="under_10k" {% if profile and profile.investable_amount_band == "under_10k" %}selected{% endif %}>Under $10k</option><option value="10k_50k" {% if profile and profile.investable_amount_band == "10k_50k" %}selected{% endif %}>$10k-$50k</option><option value="50k_250k" {% if profile and profile.investable_amount_band == "50k_250k" %}selected{% endif %}>$50k-$250k</option><option value="250k_1m" {% if profile and profile.investable_amount_band == "250k_1m" %}selected{% endif %}>$250k-$1m</option><option value="1m_plus" {% if profile and profile.investable_amount_band == "1m_plus" %}selected{% endif %}>$1m+</option></select></label>
+        <label>Goal<select name="goal_primary"><option value="balanced_growth" {% if profile and profile.goal_primary == "balanced_growth" %}selected{% endif %}>Balanced growth</option><option value="aggressive_growth" {% if profile and profile.goal_primary == "aggressive_growth" %}selected{% endif %}>Aggressive growth</option><option value="capital_preservation" {% if profile and profile.goal_primary == "capital_preservation" %}selected{% endif %}>Capital preservation</option><option value="income" {% if profile and profile.goal_primary == "income" %}selected{% endif %}>Income</option></select></label>
+        <label>Risk<select name="risk_tolerance"><option value="balanced" {% if profile and profile.risk_tolerance == "balanced" %}selected{% endif %}>Balanced</option><option value="aggressive" {% if profile and profile.risk_tolerance == "aggressive" %}selected{% endif %}>Aggressive</option><option value="conservative" {% if profile and profile.risk_tolerance == "conservative" %}selected{% endif %}>Conservative</option></select></label>
+        <label>Max drawdown<select name="max_drawdown_band"><option value="under_10" {% if profile and profile.max_drawdown_band == "under_10" %}selected{% endif %}>Under 10%</option><option value="under_15" {% if profile and profile.max_drawdown_band == "under_15" %}selected{% endif %}>Under 15%</option><option value="under_20" {% if profile and profile.max_drawdown_band == "under_20" %}selected{% endif %}>Under 20%</option><option value="under_30" {% if profile and profile.max_drawdown_band == "under_30" %}selected{% endif %}>Under 30%</option></select></label>
+        <label>Holding period<select name="holding_period_preference"><option value="short_term" {% if profile and profile.holding_period_preference == "short_term" %}selected{% endif %}>Short term</option><option value="swing" {% if profile and profile.holding_period_preference == "swing" %}selected{% endif %}>Swing</option><option value="medium_term" {% if profile and profile.holding_period_preference == "medium_term" %}selected{% endif %}>Medium term</option><option value="long_term" {% if profile and profile.holding_period_preference == "long_term" %}selected{% endif %}>Long term</option></select></label>
+        <label>Income stability<select name="income_stability_band"><option value="mostly_stable" {% if profile and profile.income_stability_band == "mostly_stable" %}selected{% endif %}>Mostly stable</option><option value="stable" {% if profile and profile.income_stability_band == "stable" %}selected{% endif %}>Stable</option><option value="variable" {% if profile and profile.income_stability_band == "variable" %}selected{% endif %}>Variable</option></select></label>
+        <label>Sector concentration<select name="sector_concentration_tolerance"><option value="medium" {% if profile and profile.sector_concentration_tolerance == "medium" %}selected{% endif %}>Medium</option><option value="high" {% if profile and profile.sector_concentration_tolerance == "high" %}selected{% endif %}>High</option><option value="low" {% if profile and profile.sector_concentration_tolerance == "low" %}selected{% endif %}>Low</option></select></label>
+        <label>Experience<select name="experience_level"><option value="intermediate" {% if profile and profile.experience_level == "intermediate" %}selected{% endif %}>Intermediate</option><option value="advanced" {% if profile and profile.experience_level == "advanced" %}selected{% endif %}>Advanced</option><option value="beginner" {% if profile and profile.experience_level == "beginner" %}selected{% endif %}>Beginner</option></select></label>
         <button class="button primary" type="submit">Save profile</button>
+      </form>
+      <form id="password-form" class="grid-form">
+        <label>Current password<input name="current_password" type="password" minlength="8" required /></label>
+        <label>New password<input name="new_password" type="password" minlength="8" required /></label>
+        <button class="button secondary" type="submit">Change password</button>
       </form>
       <div class="button-row">
         <button class="button secondary checkout-button" data-cycle="monthly" type="button">Start monthly trial</button>
         <button class="button secondary checkout-button" data-cycle="annual" type="button">Start annual trial</button>
         <button class="button secondary" id="billing-portal-button" type="button">Billing portal</button>
       </div>
+      <div class="table-card">
+        <table>
+          <thead><tr><th>System</th><th>Status</th><th>Last checked</th></tr></thead>
+          <tbody>
+            {% for item in system_status.connectors %}
+            <tr>
+              <td>{{ item.connector_name|replace("_", " ")|title }}</td>
+              <td>{{ item.status|replace("_", " ") }}</td>
+              <td>{{ item.last_polled_at.strftime("%Y-%m-%d %H:%M UTC") if item.last_polled_at else "n/a" }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% if not system_status.billing_enabled %}
+      <p class="muted">Billing is not configured in production yet. New accounts still receive a trial, but paid checkout will stay unavailable until Stripe keys are added.</p>
+      {% endif %}
+      {% if not system_status.password_reset_email_enabled %}
+      <p class="muted">Password reset emails are not configured yet. Logged-in users can still change their password from this page.</p>
+      {% endif %}
     </section>
     {% elif current_page == "admin-users" %}
     <section class="panel">

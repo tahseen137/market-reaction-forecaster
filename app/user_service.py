@@ -259,6 +259,19 @@ def reset_password_with_token(session: Session, token: str, password: str) -> Us
     return user
 
 
+def change_password(session: Session, user: User, *, current_password: str, new_password: str) -> User:
+    if not verify_password(current_password, user.password_hash):
+        raise ValueError("Current password is invalid")
+    user.password_hash = hash_password(new_password)
+    user.password_reset_token = None
+    user.failed_login_attempts = 0
+    user.locked_until = None
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+    return user
+
+
 @dataclass
 class AuthResult:
     user: User | None

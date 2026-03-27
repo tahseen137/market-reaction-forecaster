@@ -71,7 +71,22 @@ def test_profile_session_and_subscription_endpoints(client, admin_headers):
     assert subscription.status_code == 200
     assert subscription.json()["status"] in {"active", "trialing"}
 
+    system_status = client.get("/api/system/status")
+    assert system_status.status_code == 200
+    assert system_status.json()["scheduler_enabled"] is True
+    assert any(item["connector_name"] == "market_refresh" for item in system_status.json()["connectors"])
+
+    changed = client.post(
+        "/api/account/change-password",
+        headers=admin_headers,
+        json={"current_password": "pilot-password", "new_password": "pilot-password-2"},
+    )
+    assert changed.status_code == 200
+
     logout = client.post("/api/session/logout", headers=admin_headers)
     assert logout.status_code == 204
     protected = client.get("/api/profile")
     assert protected.status_code == 401
+
+    relogin = client.post("/api/session/login", json={"username": "admin", "password": "pilot-password-2", "next_path": "/dashboard"})
+    assert relogin.status_code == 200

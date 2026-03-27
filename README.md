@@ -12,7 +12,7 @@ The launch product is deliberately aggressive:
 ## What the product does
 
 - Public marketing site with delayed sample calls
-- Account signup, login, password reset, session auth, and CSRF protection
+- Account signup, login, password reset email hooks, self-serve password change, session auth, and CSRF protection
 - Trial and subscription state model with Stripe-ready billing hooks
 - Personalized recommendation feed driven by:
   - event classification
@@ -26,6 +26,7 @@ The launch product is deliberately aggressive:
   - Twelve Data quotes
 - Backtest snapshot and model portfolio views
 - Admin user management and market refresh operations
+- Account-level system status with connector visibility and scheduler state
 - Markdown report exports for recommendations and backtests
 - Docker, Alembic, CI, and Render deployment config
 
@@ -67,6 +68,7 @@ Open [http://127.0.0.1:8000](http://127.0.0.1:8000).
 - `STRIPE_PRICE_MONTHLY`
 - `STRIPE_PRICE_ANNUAL`
 - `POSTMARK_SERVER_TOKEN`
+- `POSTMARK_FROM_EMAIL`
 
 See [.env.example](./.env.example) for the full list.
 
@@ -87,7 +89,7 @@ The repo is configured to enforce:
 - Production deploy target is Render via [render.yaml](./render.yaml)
 - The blueprint includes:
   - a web service
-  - a background worker
+  - a background worker with the weekday refresh scheduler
   - managed Postgres
   - managed Redis-compatible key-value storage
 

@@ -37,11 +37,14 @@ from app.billing import create_checkout_session, create_portal_session, handle_w
 from app.config import Settings, get_settings
 from app.db import DatabaseState, build_database_state, database_is_ready, init_database
 from app.models import BacktestRun, Event, User
+from app.notifications import send_password_reset_email
 from app.reporting import build_backtest_markdown, build_recommendation_markdown
 from app.schemas import (
     ActivityEventRead,
     BacktestRunRead,
     BillingRequest,
+    ChangePasswordRequest,
+    ConnectorStatusRead,
     CurrentUserResponse,
     DashboardRead,
     EventCreate,
@@ -57,6 +60,7 @@ from app.schemas import (
     SessionSignupRequest,
     SessionStatusResponse,
     SubscriptionRead,
+    SystemStatusRead,
     UserCreateRequest,
     UserProfileRead,
     UserProfileWrite,
@@ -68,6 +72,7 @@ from app.schemas import (
 from app.services import (
     build_dashboard,
     build_model_portfolio,
+    build_system_status,
     create_event,
     create_watchlist,
     default_profile_payload,
@@ -93,6 +98,7 @@ from app.user_service import (
     acknowledge_disclosures,
     authenticate_user,
     can_manage_users,
+    change_password,
     create_or_update_profile,
     create_user,
     ensure_bootstrap_admin,
@@ -202,6 +208,12 @@ def _backtest_read(run: BacktestRun) -> BacktestRunRead:
     return BacktestRunRead.model_validate(run)
 
 
+def _system_status_read(data: dict[str, Any]) -> SystemStatusRead:
+    return SystemStatusRead.model_validate(
+        data | {"connectors": [ConnectorStatusRead.model_validate(item) for item in data["connectors"]]}
+    )
+
+
 def _require_csrf(request: Request) -> None:
     if auth_required(request) and not csrf_token_matches(request, request.headers.get("X-CSRF-Token")):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="CSRF token is invalid")
@@ -251,6 +263,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 rebuild_model_portfolio_for_user(session, admin_user)
             rebuild_all_user_recommendations(session)
             refresh_backtest(session)
+            build_system_status(session, resolved_settings)
             app.state.auth_required = bool(list_users(session))
         yield
         database_state.engine.dispose()
@@ -597,7 +610,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> HTMLResponse:
         profile = UserProfileRead.model_validate(current_user.profile) if current_user.profile else None
         subscription = _subscription_read(current_user)
-        activity = [_activity_read(item) for item in list_activity_events(session, limit=25)]
+        activity = [
+            _activity_read(item)
+            for item in list_activity_events(
+                session,
+                limit=25,
+                actor_user_id=None if can_manage_users(current_user) else current_user.id,
+            )
+        ]
+        system_status = _system_status_read(build_system_status(session, settings))
         return templates.TemplateResponse(
             request,
             "app.html",
@@ -609,10 +630,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 title="Account",
                 profile=profile,
                 subscription=subscription,
+                system_status=system_status,
                 activity=activity,
                 page_data={
                     "profile": profile.model_dump(mode="json") if profile else None,
                     "subscription": subscription.model_dump(mode="json") if subscription else None,
+                    "system_status": system_status.model_dump(mode="json"),
                     "activity": [item.model_dump(mode="json") for item in activity],
                 },
             ),
@@ -693,8 +716,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def forgot_password_api(payload: ForgotPasswordRequest, session: Session = Depends(get_session), settings: Settings = Depends(get_runtime_settings)) -> dict[str, object]:
         user = get_user_by_email(session, payload.email)
         debug_token: str | None = None
+        if settings.app_env != "test" and not settings.password_reset_email_enabled:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Password reset email is not configured")
         if user is not None:
             debug_token = issue_password_reset_token(session, user)
+            if settings.app_env != "test":
+                reset_url = f"{settings.site_url.rstrip('/')}/login?reset_token={debug_token}"
+                try:
+                    send_password_reset_email(settings, user, reset_url=reset_url)
+                except Exception as exc:
+                    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Password reset email delivery failed") from exc
             record_activity(session, actor=user, action="session.password_reset_requested", entity_type="user", entity_id=user.id, description=f"{user.username} requested a password reset", details={})
         response: dict[str, object] = {"status": "ok"}
         if settings.app_env == "test":
@@ -744,6 +775,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if subscription is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subscription not found")
         return subscription
+
+    @app.post("/api/account/change-password")
+    def change_password_api(payload: ChangePasswordRequest, request: Request, session: Session = Depends(get_session), current_user: User = Depends(require_authenticated_api)) -> dict[str, str]:
+        _require_csrf(request)
+        try:
+            change_password(session, current_user, current_password=payload.current_password, new_password=payload.new_password)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        record_activity(session, actor=current_user, action="account.password_changed", entity_type="user", entity_id=current_user.id, description=f"{current_user.username} changed the account password", details={})
+        return {"status": "ok"}
+
+    @app.get("/api/system/status", response_model=SystemStatusRead)
+    def system_status_api(session: Session = Depends(get_session), settings: Settings = Depends(get_runtime_settings), current_user: User = Depends(require_authenticated_api)) -> SystemStatusRead:
+        return _system_status_read(build_system_status(session, settings))
 
     @app.post("/api/billing/create-checkout-session")
     def create_checkout_session_api(payload: BillingRequest, request: Request, current_user: User = Depends(require_authenticated_api), settings: Settings = Depends(get_runtime_settings)) -> dict[str, str]:

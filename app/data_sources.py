@@ -58,22 +58,27 @@ class TwelveDataClient:
                 as_of=_now(),
                 source_status="delayed",
             )
-
-        with httpx.Client(timeout=10) as client:
-            response = client.get(
-                "https://api.twelvedata.com/quote",
-                params={"symbol": symbol, "apikey": self.settings.twelve_data_api_key},
-            )
-            response.raise_for_status()
-            payload = response.json()
-        price = float(payload.get("close") or payload.get("price") or SAMPLE_PRICE_MAP.get(symbol, 100.0))
-        percent_change = payload.get("percent_change") or 0.0
+        try:
+            with httpx.Client(timeout=10) as client:
+                response = client.get(
+                    "https://api.twelvedata.com/quote",
+                    params={"symbol": symbol, "apikey": self.settings.twelve_data_api_key},
+                )
+                response.raise_for_status()
+                payload = response.json()
+            price = float(payload.get("close") or payload.get("price") or SAMPLE_PRICE_MAP.get(symbol, 100.0))
+            percent_change = payload.get("percent_change") or 0.0
+            source_status = "real-time"
+        except Exception:
+            price = SAMPLE_PRICE_MAP.get(symbol, 100.0)
+            percent_change = 0.8
+            source_status = "delayed"
         return QuoteSnapshot(
             symbol=symbol,
             price=price,
             day_change_pct=float(percent_change),
             as_of=_now(),
-            source_status="real-time",
+            source_status=source_status,
         )
 
 
@@ -86,18 +91,21 @@ class FinnhubClient:
             return []
         start = start_date or (_now().date() - timedelta(days=3))
         end = end_date or _now().date()
-        with httpx.Client(timeout=10) as client:
-            response = client.get(
-                "https://finnhub.io/api/v1/company-news",
-                params={
-                    "symbol": symbol,
-                    "from": start.isoformat(),
-                    "to": end.isoformat(),
-                    "token": self.settings.finnhub_api_key,
-                },
-            )
-            response.raise_for_status()
-            payload = response.json()
+        try:
+            with httpx.Client(timeout=10) as client:
+                response = client.get(
+                    "https://finnhub.io/api/v1/company-news",
+                    params={
+                        "symbol": symbol,
+                        "from": start.isoformat(),
+                        "to": end.isoformat(),
+                        "token": self.settings.finnhub_api_key,
+                    },
+                )
+                response.raise_for_status()
+                payload = response.json()
+        except Exception:
+            return []
         candidates: list[NormalizedEventCandidate] = []
         for item in payload[:5]:
             headline = str(item.get("headline", "")).strip()

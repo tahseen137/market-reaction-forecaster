@@ -12,7 +12,7 @@ COPY app /app/app
 COPY start.sh /app/start.sh
 
 RUN pip install --no-cache-dir .
-RUN chmod +x /app/start.sh
+RUN sed -i 's/\r$//' /app/start.sh && chmod +x /app/start.sh
 
 EXPOSE 8000
 

@@ -109,6 +109,19 @@ document.getElementById("profile-form")?.addEventListener("submit", async (event
   }
 });
 
+document.getElementById("password-form")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const formData = new FormData(event.currentTarget);
+  const payload = Object.fromEntries(formData.entries());
+  try {
+    await apiRequest("/api/account/change-password", { method: "POST", body: JSON.stringify(payload) });
+    event.currentTarget.reset();
+    setStatus("Password updated.");
+  } catch (error) {
+    setStatus(error.message, true);
+  }
+});
+
 document.getElementById("admin-user-form")?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const formData = new FormData(event.currentTarget);

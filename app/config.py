@@ -28,6 +28,10 @@ class Settings(BaseSettings):
 
     redis_url: str = "redis://127.0.0.1:6379/0"
     celery_task_always_eager: bool = False
+    worker_scheduler_enabled: bool = True
+    market_refresh_timezone: str = "America/Toronto"
+    market_refresh_hour_local: int = 17
+    market_refresh_minute_local: int = 10
 
     storage_backend: str = "local"
     s3_bucket: str | None = None
@@ -112,6 +116,11 @@ class Settings(BaseSettings):
             and self.stripe_price_monthly
             and self.stripe_price_annual
         )
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def password_reset_email_enabled(self) -> bool:
+        return bool(self.postmark_server_token and self.postmark_from_email)
 
 
 @lru_cache

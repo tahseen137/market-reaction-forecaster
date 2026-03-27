@@ -8,8 +8,12 @@ from alembic.config import Config
 from types import SimpleNamespace
 
 import app.billing as billing_module
+import app.notifications as notifications_module
 from app.billing import create_checkout_session, create_portal_session, handle_webhook_event
+from app.celery_app import celery_app
 from app.data_sources import FinnhubClient, SecEdgarClient, TwelveDataClient
+from app.notifications import send_password_reset_email
+from app.services import build_system_status, seed_demo_content, seed_universe
 from app.tasks import refresh_market_state_task
 from app.user_service import create_user, get_subscription_state
 
@@ -21,6 +25,29 @@ def test_data_source_fallbacks_without_live_keys(settings):
 
     assert FinnhubClient(settings).get_company_news("NVDA") == []
     assert SecEdgarClient(settings).get_recent_filings("NVDA", None) == []
+
+
+def test_live_data_clients_fallback_on_provider_errors(settings, monkeypatch):
+    configured = settings.model_copy(update={"twelve_data_api_key": "td", "finnhub_api_key": "fh"})
+
+    class BrokenClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+        def get(self, *args, **kwargs):
+            raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr("app.data_sources.httpx.Client", BrokenClient)
+
+    quote = TwelveDataClient(configured).get_quote("NVDA")
+    assert quote.source_status == "delayed"
+    assert FinnhubClient(configured).get_company_news("NVDA") == []
 
 
 def test_billing_errors_without_configuration(session, settings):
@@ -132,6 +159,61 @@ def test_task_entrypoint_runs_with_eager_settings(monkeypatch, settings):
     monkeypatch.setattr("app.tasks.refresh_market_state", fake_refresh_market_state)
     refresh_market_state_task()
     assert called["count"] == 1
+
+
+def test_celery_scheduler_config_is_present():
+    assert "weekday-market-refresh" in celery_app.conf.beat_schedule
+    assert celery_app.conf.timezone == "America/Toronto"
+
+
+def test_password_reset_email_can_be_sent_with_stubbed_postmark(session, settings, monkeypatch):
+    user = create_user(
+        session,
+        username="mailer",
+        email="mailer@example.com",
+        password="mailer-password-123",
+        full_name="Mailer User",
+        settings=settings,
+    )
+    configured = settings.model_copy(update={"postmark_server_token": "postmark-token", "postmark_from_email": "no-reply@example.com"})
+    sent = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+        def post(self, url, *, headers, json):
+            sent["url"] = url
+            sent["headers"] = headers
+            sent["json"] = json
+            return FakeResponse()
+
+    monkeypatch.setattr(notifications_module.httpx, "Client", FakeClient)
+
+    send_password_reset_email(configured, user, reset_url="https://example.com/reset?token=abc")
+    assert sent["headers"]["X-Postmark-Server-Token"] == "postmark-token"
+    assert sent["json"]["To"] == "mailer@example.com"
+    assert "reset?token=abc" in sent["json"]["TextBody"]
+
+
+def test_system_status_contains_connector_states(session, settings):
+    seed_universe(session)
+    seed_demo_content(session, settings)
+
+    status = build_system_status(session, settings)
+    connector_names = {item["connector_name"] for item in status["connectors"]}
+    assert status["scheduler_enabled"] is True
+    assert {"market_refresh", "billing", "password_reset_email", "quote_feed"}.issubset(connector_names)
 
 
 def test_alembic_upgrade_head_creates_market_tables(tmp_path: Path):
