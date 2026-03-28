@@ -101,6 +101,7 @@ The repo is configured to enforce:
 - [Marketing plan](./docs/marketing-plan.md)
 - [Commercialization package](./docs/commercialization-package.md)
 - [Launch readiness](./docs/launch-readiness.md)
+- [Validation todo](./docs/validation-todo.md)
 
 ## Important note
 
