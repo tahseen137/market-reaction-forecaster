@@ -37,6 +37,7 @@ UNIVERSE_SECURITIES: list[dict[str, str]] = [
 ]
 
 SAMPLE_PRICE_MAP: dict[str, float] = {
+    "QQQ": 488.12,
     "AAPL": 224.18,
     "MSFT": 431.09,
     "NVDA": 1187.44,

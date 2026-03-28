@@ -26,6 +26,11 @@ The launch product is deliberately aggressive:
   - Twelve Data quotes
 - Backtest snapshot and model portfolio views
 - Admin user management and market refresh operations
+- Validation instrumentation:
+  - funnel analytics for signup, profile completion, disclosure acknowledgment, watchlists, recommendation views, and checkout starts/completions
+  - recommendation snapshot export
+  - daily validation reports with shadow-portfolio performance
+  - admin validation dashboard at `/admin/validation`
 - Account-level system status with connector visibility and scheduler state
 - Markdown report exports for recommendations and backtests
 - Docker, Alembic, CI, and Render deployment config

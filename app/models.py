@@ -227,6 +227,8 @@ class RecommendationSnapshot(Base):
     confidence_score: Mapped[float] = mapped_column(Float, nullable=False)
     analog_sample_size: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     benchmark_symbol: Mapped[str] = mapped_column(String(12), default="QQQ", nullable=False)
+    reference_price: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    benchmark_reference_price: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     source_status: Mapped[str] = mapped_column(String(16), default="delayed", nullable=False)
     thesis_summary: Mapped[str] = mapped_column(Text, nullable=False)
     evidence_summary: Mapped[str] = mapped_column(Text, nullable=False)
@@ -237,6 +239,10 @@ class RecommendationSnapshot(Base):
     security: Mapped[Security] = relationship(back_populates="recommendation_snapshots")
     latest_event: Mapped[Event | None] = relationship(back_populates="recommendation_snapshots")
     personalized_recommendations: Mapped[list["UserRecommendation"]] = relationship(
+        back_populates="recommendation_snapshot",
+        cascade="all, delete-orphan",
+    )
+    validation_outcomes: Mapped[list["RecommendationOutcome"]] = relationship(
         back_populates="recommendation_snapshot",
         cascade="all, delete-orphan",
     )
@@ -268,6 +274,63 @@ class UserRecommendation(Base):
 
     user: Mapped[User] = relationship(back_populates="personalized_recommendations")
     recommendation_snapshot: Mapped[RecommendationSnapshot] = relationship(back_populates="personalized_recommendations")
+
+
+class RecommendationOutcome(TimestampMixin, Base):
+    __tablename__ = "recommendation_outcomes"
+    __table_args__ = (
+        UniqueConstraint("recommendation_snapshot_id", "horizon_days", name="uq_recommendation_outcome_horizon"),
+        Index("ix_recommendation_outcomes_status", "status"),
+        Index("ix_recommendation_outcomes_target_at", "target_at"),
+        Index("ix_recommendation_outcomes_security_id", "security_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    recommendation_snapshot_id: Mapped[str] = mapped_column(
+        ForeignKey("recommendation_snapshots.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    security_id: Mapped[str] = mapped_column(ForeignKey("securities.id", ondelete="CASCADE"), nullable=False)
+    action: Mapped[str] = mapped_column(String(12), nullable=False)
+    confidence_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    horizon_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    benchmark_symbol: Mapped[str] = mapped_column(String(12), default="QQQ", nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="open", nullable=False)
+    target_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reference_price: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    benchmark_reference_price: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    observed_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    benchmark_observed_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    observed_return_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    strategy_return_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    benchmark_return_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    excess_return_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    baseline_label: Mapped[str] = mapped_column(String(32), default="event_bias", nullable=False)
+    baseline_action: Mapped[str] = mapped_column(String(12), default="hold", nullable=False)
+    baseline_return_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    directional_correct: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    metadata_json: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+
+    recommendation_snapshot: Mapped[RecommendationSnapshot] = relationship(back_populates="validation_outcomes")
+    security: Mapped[Security] = relationship()
+
+
+class ValidationReport(Base):
+    __tablename__ = "validation_reports"
+    __table_args__ = (
+        UniqueConstraint("report_date", name="uq_validation_reports_report_date"),
+        Index("ix_validation_reports_generated_at", "generated_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    report_date: Mapped[str] = mapped_column(String(10), nullable=False)
+    benchmark_symbol: Mapped[str] = mapped_column(String(12), default="QQQ", nullable=False)
+    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_timestamp, nullable=False)
+    funnel_json: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+    forecast_metrics_json: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+    shadow_portfolio_json: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+    metadata_json: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
 
 
 class BacktestRun(Base):

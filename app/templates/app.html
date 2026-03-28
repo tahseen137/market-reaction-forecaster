@@ -15,6 +15,7 @@
       <a href="/account">Account</a>
       {% if current_user.role == "admin" %}
       <a href="/admin/users">Admin</a>
+      <a href="/admin/validation">Validation</a>
       {% endif %}
     </div>
     <button class="button secondary" id="logout-button" type="button">Log out</button>
@@ -192,6 +193,92 @@
       {% if not system_status.password_reset_email_enabled %}
       <p class="muted">Password reset emails are not configured yet. Logged-in users can still change their password from this page.</p>
       {% endif %}
+    </section>
+    {% elif current_page == "admin-validation" %}
+    <section class="panel">
+      <div class="section-heading">
+        <div><p class="eyebrow">Admin</p><h1>Validation dashboard</h1></div>
+        <button class="button secondary" id="refresh-market-button" type="button">Refresh market</button>
+      </div>
+      <div class="metric-row">
+        <article><span>Active users ({{ validation_summary.lookback_days }}d)</span><strong>{{ validation_summary.funnel.active_user_count }}</strong></article>
+        <article><span>Signups</span><strong>{{ validation_summary.funnel.counts.get("signup_completed", 0) }}</strong></article>
+        <article><span>Recommendation views</span><strong>{{ validation_summary.funnel.counts.get("recommendation_viewed", 0) }}</strong></article>
+        <article><span>Checkout starts</span><strong>{{ validation_summary.funnel.counts.get("checkout_started", 0) }}</strong></article>
+        <article><span>Resolved outcomes</span><strong>{{ validation_summary.forecast_metrics.resolved_outcomes }}</strong></article>
+      </div>
+      <div class="button-row">
+        <a class="button secondary" href="/api/admin/validation/recommendation-snapshots.csv">Export snapshots CSV</a>
+        <a class="button secondary" href="/api/admin/validation/reports.csv">Export reports CSV</a>
+      </div>
+    </section>
+    <section class="panel">
+      <p class="eyebrow">Forecast quality</p>
+      <div class="table-card">
+        <table>
+          <thead><tr><th>Horizon</th><th>Resolved</th><th>Hit rate</th><th>Avg strategy</th><th>Avg benchmark</th><th>Avg excess</th></tr></thead>
+          <tbody>
+            {% for horizon, item in validation_summary.forecast_metrics.by_horizon.items() %}
+            <tr>
+              <td>{{ horizon }}d</td>
+              <td>{{ item.count }}</td>
+              <td>{{ "%.0f%%"|format(item.hit_rate * 100) }}</td>
+              <td>{{ "%.2f%%"|format(item.average_strategy_return_pct) }}</td>
+              <td>{{ "%.2f%%"|format(item.average_benchmark_return_pct) }}</td>
+              <td>{{ "%.2f%%"|format(item.average_excess_return_pct) }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="metric-row">
+        <article><span>High confidence hit rate</span><strong>{{ "%.0f%%"|format(validation_summary.forecast_metrics.confidence_buckets.high.hit_rate * 100) }}</strong></article>
+        <article><span>Medium confidence hit rate</span><strong>{{ "%.0f%%"|format(validation_summary.forecast_metrics.confidence_buckets.medium.hit_rate * 100) }}</strong></article>
+        <article><span>Low confidence hit rate</span><strong>{{ "%.0f%%"|format(validation_summary.forecast_metrics.confidence_buckets.low.hit_rate * 100) }}</strong></article>
+      </div>
+    </section>
+    <section class="panel">
+      <p class="eyebrow">Shadow portfolio</p>
+      <div class="metric-row">
+        <article><span>Open positions</span><strong>{{ validation_summary.shadow_portfolio.open_positions }}</strong></article>
+        <article><span>Avg strategy</span><strong>{{ "%.2f%%"|format(validation_summary.shadow_portfolio.average_strategy_return_pct) }}</strong></article>
+        <article><span>Avg benchmark</span><strong>{{ "%.2f%%"|format(validation_summary.shadow_portfolio.average_benchmark_return_pct) }}</strong></article>
+        <article><span>Avg excess</span><strong>{{ "%.2f%%"|format(validation_summary.shadow_portfolio.average_excess_return_pct) }}</strong></article>
+      </div>
+      <div class="table-card">
+        <table>
+          <thead><tr><th>Symbol</th><th>Confidence</th><th>Strategy</th><th>Benchmark</th><th>Excess</th></tr></thead>
+          <tbody>
+            {% for item in validation_summary.shadow_portfolio.positions %}
+            <tr>
+              <td>{{ item.symbol }}</td>
+              <td>{{ "%.0f%%"|format(item.confidence_score * 100) }}</td>
+              <td>{{ "%.2f%%"|format(item.strategy_return_pct) }}</td>
+              <td>{{ "%.2f%%"|format(item.benchmark_return_pct) }}</td>
+              <td>{{ "%.2f%%"|format(item.excess_return_pct) }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+    <section class="panel">
+      <p class="eyebrow">Daily reports</p>
+      <div class="table-card">
+        <table>
+          <thead><tr><th>Date</th><th>Generated</th><th>Resolved outcomes</th><th>Shadow excess</th></tr></thead>
+          <tbody>
+            {% for report in validation_reports %}
+            <tr>
+              <td>{{ report.report_date }}</td>
+              <td>{{ report.generated_at.strftime("%Y-%m-%d %H:%M UTC") }}</td>
+              <td>{{ report.forecast_metrics_json.get("resolved_outcomes", 0) }}</td>
+              <td>{{ "%.2f%%"|format(report.shadow_portfolio_json.get("average_excess_return_pct", 0.0)) }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
     </section>
     {% elif current_page == "admin-users" %}
     <section class="panel">

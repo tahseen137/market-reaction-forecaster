@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Iterable
+from io import StringIO
+from typing import Any, Iterable
+import csv
 
 from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.activity_service import summarize_analytics_events
 from app.config import Settings
 from app.data_sources import FinnhubClient, NormalizedEventCandidate, RssFeedClient, SecEdgarClient, TwelveDataClient, hash_content
 from app.models import (
@@ -13,12 +16,14 @@ from app.models import (
     ConnectorState,
     Event,
     PortfolioPosition,
+    RecommendationOutcome,
     RecommendationSnapshot,
     Security,
     SourceSnapshot,
     SubscriptionState,
     User,
     UserRecommendation,
+    ValidationReport,
     Watchlist,
     WatchlistSecurity,
 )
@@ -173,6 +178,76 @@ def build_system_status(session: Session, settings: Settings) -> dict[str, objec
     }
 
 
+VALIDATION_HORIZONS = (1, 5, 20)
+
+
+def _add_trading_days(started_at: datetime, trading_days: int) -> datetime:
+    cursor = _coerce_utc(started_at) or _now()
+    remaining = trading_days
+    while remaining > 0:
+        cursor += timedelta(days=1)
+        if cursor.weekday() < 5:
+            remaining -= 1
+    return cursor
+
+
+def _safe_return_pct(exit_price: float | None, entry_price: float | None) -> float:
+    if not exit_price or not entry_price:
+        return 0.0
+    return round(((exit_price - entry_price) / entry_price) * 100, 4)
+
+
+def _strategy_return_pct(action: str, observed_return_pct: float) -> float:
+    if action == "buy":
+        return round(observed_return_pct, 4)
+    if action == "sell":
+        return round(-observed_return_pct, 4)
+    return 0.0
+
+
+def _baseline_action_from_bias(directional_bias: float) -> str:
+    if directional_bias >= 0.05:
+        return "buy"
+    if directional_bias <= -0.05:
+        return "sell"
+    return "hold"
+
+
+def _directional_correct(action: str, observed_return_pct: float) -> bool:
+    if action == "buy":
+        return observed_return_pct > 0
+    if action == "sell":
+        return observed_return_pct < 0
+    return abs(observed_return_pct) <= 1.5
+
+
+def _report_date(value: datetime | None = None) -> str:
+    return (value or _now()).date().isoformat()
+
+
+def _average(values: list[float]) -> float:
+    return round(sum(values) / len(values), 4) if values else 0.0
+
+
+def _json_ready(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(key): _json_ready(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_ready(item) for item in value]
+    return value
+
+
+def _benchmark_quote_price(settings: Settings, cache: dict[str, float] | None = None) -> float:
+    if cache is not None and BENCHMARK_SYMBOL in cache:
+        return cache[BENCHMARK_SYMBOL]
+    price = TwelveDataClient(settings).get_quote(BENCHMARK_SYMBOL).price
+    if cache is not None:
+        cache[BENCHMARK_SYMBOL] = price
+    return price
+
+
 def _latest_snapshots(session: Session) -> list[RecommendationSnapshot]:
     snapshots = list(
         session.scalars(
@@ -186,6 +261,138 @@ def _latest_snapshots(session: Session) -> list[RecommendationSnapshot]:
     for snapshot in snapshots:
         latest_by_security.setdefault(snapshot.security_id, snapshot)
     return list(latest_by_security.values())
+
+
+def _validation_outcome_query() -> Select[tuple[RecommendationOutcome]]:
+    return (
+        select(RecommendationOutcome)
+        .options(
+            selectinload(RecommendationOutcome.security),
+            selectinload(RecommendationOutcome.recommendation_snapshot).selectinload(RecommendationSnapshot.latest_event),
+            selectinload(RecommendationOutcome.recommendation_snapshot).selectinload(RecommendationSnapshot.security),
+        )
+        .order_by(RecommendationOutcome.created_at.desc())
+    )
+
+
+def _validation_report_query() -> Select[tuple[ValidationReport]]:
+    return select(ValidationReport).order_by(ValidationReport.generated_at.desc())
+
+
+def ensure_recommendation_outcomes(session: Session, snapshot: RecommendationSnapshot) -> list[RecommendationOutcome]:
+    existing = list(
+        session.scalars(
+            _validation_outcome_query().where(RecommendationOutcome.recommendation_snapshot_id == snapshot.id)
+        )
+    )
+    if existing:
+        return existing
+
+    outcomes: list[RecommendationOutcome] = []
+    for horizon_days in VALIDATION_HORIZONS:
+        outcome = RecommendationOutcome(
+            recommendation_snapshot_id=snapshot.id,
+            security_id=snapshot.security_id,
+            action=snapshot.action,
+            confidence_score=snapshot.confidence_score,
+            horizon_days=horizon_days,
+            benchmark_symbol=snapshot.benchmark_symbol,
+            status="open",
+            target_at=_add_trading_days(snapshot.generated_at, horizon_days),
+            reference_price=snapshot.reference_price,
+            benchmark_reference_price=snapshot.benchmark_reference_price,
+            metadata_json={"model_version": snapshot.model_version},
+        )
+        session.add(outcome)
+        outcomes.append(outcome)
+    session.commit()
+    return list(
+        session.scalars(
+            _validation_outcome_query().where(RecommendationOutcome.recommendation_snapshot_id == snapshot.id)
+        )
+    )
+
+
+def ensure_validation_outcomes_for_all_snapshots(session: Session) -> None:
+    snapshots = list(
+        session.scalars(
+            _recommendation_query()
+            .options(selectinload(RecommendationSnapshot.latest_event), selectinload(RecommendationSnapshot.security))
+        )
+    )
+    for snapshot in snapshots:
+        ensure_recommendation_outcomes(session, snapshot)
+
+
+def resolve_due_recommendation_outcomes(session: Session, settings: Settings) -> list[RecommendationOutcome]:
+    due_outcomes = list(
+        session.scalars(
+            _validation_outcome_query().where(
+                RecommendationOutcome.status == "open",
+                RecommendationOutcome.target_at <= _now(),
+            )
+        )
+    )
+    if not due_outcomes:
+        return []
+
+    quote_client = TwelveDataClient(settings)
+    benchmark_quotes: dict[str, float] = {}
+    security_quotes: dict[str, float] = {}
+    resolved_at = _now()
+
+    for outcome in due_outcomes:
+        symbol = outcome.security.symbol
+        benchmark_symbol = outcome.benchmark_symbol
+        security_price = security_quotes.get(symbol)
+        if security_price is None:
+            security_quote = quote_client.get_quote(symbol)
+            security_price = security_quote.price
+            security_quotes[symbol] = security_price
+            outcome.security.last_price = security_quote.price
+            outcome.security.day_change_pct = security_quote.day_change_pct
+            outcome.security.last_price_at = security_quote.as_of
+            session.add(outcome.security)
+        benchmark_price = benchmark_quotes.get(benchmark_symbol)
+        if benchmark_price is None:
+            benchmark_price = quote_client.get_quote(benchmark_symbol).price
+            benchmark_quotes[benchmark_symbol] = benchmark_price
+
+        observed_return_pct = _safe_return_pct(security_price, outcome.reference_price)
+        benchmark_return_pct = _safe_return_pct(benchmark_price, outcome.benchmark_reference_price)
+        strategy_return_pct = _strategy_return_pct(outcome.action, observed_return_pct)
+        bias = outcome.recommendation_snapshot.latest_event.directional_bias if outcome.recommendation_snapshot.latest_event else 0.0
+        baseline_action = _baseline_action_from_bias(bias)
+        baseline_return_pct = _strategy_return_pct(baseline_action, observed_return_pct)
+
+        outcome.status = "resolved"
+        outcome.resolved_at = resolved_at
+        outcome.observed_price = security_price
+        outcome.benchmark_observed_price = benchmark_price
+        outcome.observed_return_pct = observed_return_pct
+        outcome.strategy_return_pct = strategy_return_pct
+        outcome.benchmark_return_pct = benchmark_return_pct
+        outcome.excess_return_pct = round(strategy_return_pct - benchmark_return_pct, 4)
+        outcome.baseline_action = baseline_action
+        outcome.baseline_return_pct = baseline_return_pct
+        outcome.directional_correct = _directional_correct(outcome.action, observed_return_pct)
+        outcome.metadata_json = {
+            **outcome.metadata_json,
+            "resolved_symbol": symbol,
+            "resolved_benchmark": benchmark_symbol,
+        }
+        session.add(outcome)
+
+    session.commit()
+    return due_outcomes
+
+
+def list_validation_reports(session: Session, *, limit: int = 30) -> list[ValidationReport]:
+    return list(session.scalars(_validation_report_query().limit(limit)))
+
+
+def get_latest_validation_report(session: Session) -> ValidationReport | None:
+    return session.scalars(_validation_report_query().limit(1)).first()
 
 
 def list_reference_universe(session: Session) -> list[Security]:
@@ -309,7 +516,13 @@ def refresh_security_quote(session: Session, settings: Settings, security: Secur
     return security
 
 
-def rebuild_security_recommendation(session: Session, settings: Settings, security: Security) -> RecommendationSnapshot:
+def rebuild_security_recommendation(
+    session: Session,
+    settings: Settings,
+    security: Security,
+    *,
+    benchmark_reference_price: float | None = None,
+) -> RecommendationSnapshot:
     latest_event = _latest_event_for_security(session, security.id)
     if latest_event is None:
         latest_event = create_event(
@@ -353,6 +566,8 @@ def rebuild_security_recommendation(session: Session, settings: Settings, securi
         confidence_score=base.confidence_score,
         analog_sample_size=base.analog_sample_size,
         benchmark_symbol=base.benchmark_symbol,
+        reference_price=security.last_price,
+        benchmark_reference_price=benchmark_reference_price or _benchmark_quote_price(settings),
         source_status=base.source_status,
         thesis_summary=base.thesis_summary,
         evidence_summary=base.evidence_summary,
@@ -363,6 +578,7 @@ def rebuild_security_recommendation(session: Session, settings: Settings, securi
     session.add(snapshot)
     session.commit()
     session.refresh(snapshot)
+    ensure_recommendation_outcomes(session, snapshot)
     return snapshot
 
 
@@ -691,6 +907,223 @@ def build_dashboard(session: Session, user: User | None = None) -> dict[str, obj
     }
 
 
+def build_shadow_portfolio_summary(session: Session, settings: Settings) -> dict[str, object]:
+    latest_buy_snapshots = [
+        snapshot
+        for snapshot in sorted(_latest_snapshots(session), key=lambda item: (item.conviction_score, item.confidence_score), reverse=True)
+        if snapshot.action == "buy"
+    ][:10]
+    if not latest_buy_snapshots:
+        return {
+            "positions": [],
+            "open_positions": 0,
+            "average_strategy_return_pct": 0.0,
+            "average_benchmark_return_pct": 0.0,
+            "average_excess_return_pct": 0.0,
+        }
+
+    strategy_returns: list[float] = []
+    benchmark_returns: list[float] = []
+    positions: list[dict[str, object]] = []
+    benchmark_price = _benchmark_quote_price(settings)
+    for snapshot in latest_buy_snapshots:
+        current_return_pct = _safe_return_pct(snapshot.security.last_price, snapshot.reference_price)
+        benchmark_return_pct = _safe_return_pct(benchmark_price, snapshot.benchmark_reference_price)
+        excess_return_pct = round(current_return_pct - benchmark_return_pct, 4)
+        strategy_returns.append(current_return_pct)
+        benchmark_returns.append(benchmark_return_pct)
+        positions.append(
+            {
+                "symbol": snapshot.security.symbol,
+                "action": snapshot.action,
+                "generated_at": snapshot.generated_at,
+                "reference_price": snapshot.reference_price,
+                "current_price": snapshot.security.last_price,
+                "benchmark_symbol": snapshot.benchmark_symbol,
+                "benchmark_reference_price": snapshot.benchmark_reference_price,
+                "benchmark_current_price": benchmark_price,
+                "strategy_return_pct": current_return_pct,
+                "benchmark_return_pct": benchmark_return_pct,
+                "excess_return_pct": excess_return_pct,
+                "confidence_score": snapshot.confidence_score,
+            }
+        )
+
+    return {
+        "positions": positions,
+        "open_positions": len(positions),
+        "average_strategy_return_pct": _average(strategy_returns),
+        "average_benchmark_return_pct": _average(benchmark_returns),
+        "average_excess_return_pct": round(_average(strategy_returns) - _average(benchmark_returns), 4),
+    }
+
+
+def build_validation_summary(session: Session, settings: Settings, *, lookback_days: int = 14) -> dict[str, Any]:
+    analytics = summarize_analytics_events(session, lookback_days=lookback_days)
+    outcomes = list(session.scalars(_validation_outcome_query()))
+    resolved_outcomes = [outcome for outcome in outcomes if outcome.status == "resolved" and outcome.strategy_return_pct is not None]
+    open_outcomes = [outcome for outcome in outcomes if outcome.status == "open"]
+
+    by_horizon: dict[str, dict[str, object]] = {}
+    for horizon in VALIDATION_HORIZONS:
+        horizon_outcomes = [item for item in resolved_outcomes if item.horizon_days == horizon]
+        by_horizon[str(horizon)] = {
+            "count": len(horizon_outcomes),
+            "hit_rate": _average([1.0 if item.directional_correct else 0.0 for item in horizon_outcomes]) if horizon_outcomes else 0.0,
+            "average_strategy_return_pct": _average([float(item.strategy_return_pct or 0.0) for item in horizon_outcomes]),
+            "average_benchmark_return_pct": _average([float(item.benchmark_return_pct or 0.0) for item in horizon_outcomes]),
+            "average_excess_return_pct": _average([float(item.excess_return_pct or 0.0) for item in horizon_outcomes]),
+        }
+
+    by_action: dict[str, dict[str, object]] = {}
+    for action in ("buy", "hold", "sell"):
+        action_outcomes = [item for item in resolved_outcomes if item.action == action]
+        by_action[action] = {
+            "count": len(action_outcomes),
+            "average_strategy_return_pct": _average([float(item.strategy_return_pct or 0.0) for item in action_outcomes]),
+            "average_baseline_return_pct": _average([float(item.baseline_return_pct or 0.0) for item in action_outcomes]),
+            "average_excess_return_pct": _average([float(item.excess_return_pct or 0.0) for item in action_outcomes]),
+        }
+
+    confidence_buckets: dict[str, dict[str, object]] = {}
+    bucket_rules = {
+        "high": lambda value: value >= 0.67,
+        "medium": lambda value: 0.5 <= value < 0.67,
+        "low": lambda value: value < 0.5,
+    }
+    for label, predicate in bucket_rules.items():
+        bucket_outcomes = [item for item in resolved_outcomes if predicate(item.confidence_score)]
+        confidence_buckets[label] = {
+            "count": len(bucket_outcomes),
+            "average_strategy_return_pct": _average([float(item.strategy_return_pct or 0.0) for item in bucket_outcomes]),
+            "hit_rate": _average([1.0 if item.directional_correct else 0.0 for item in bucket_outcomes]) if bucket_outcomes else 0.0,
+        }
+
+    forecast_metrics = {
+        "resolved_outcomes": len(resolved_outcomes),
+        "open_outcomes": len(open_outcomes),
+        "coverage_count": int(session.scalar(select(func.count()).select_from(RecommendationSnapshot)) or 0),
+        "by_horizon": by_horizon,
+        "by_action": by_action,
+        "confidence_buckets": confidence_buckets,
+    }
+    shadow_portfolio = build_shadow_portfolio_summary(session, settings)
+
+    latest_report = get_latest_validation_report(session)
+    return {
+        "generated_at": _now(),
+        "report_date": _report_date(),
+        "benchmark_symbol": BENCHMARK_SYMBOL,
+        "lookback_days": lookback_days,
+        "funnel": analytics,
+        "forecast_metrics": forecast_metrics,
+        "shadow_portfolio": shadow_portfolio,
+        "latest_report_id": latest_report.id if latest_report else None,
+        "connector_status": build_system_status(session, settings),
+    }
+
+
+def refresh_validation_report(session: Session, settings: Settings) -> ValidationReport:
+    ensure_validation_outcomes_for_all_snapshots(session)
+    resolve_due_recommendation_outcomes(session, settings)
+    summary = build_validation_summary(session, settings)
+    report_date = str(summary["report_date"])
+    report = session.scalars(select(ValidationReport).where(ValidationReport.report_date == report_date)).first()
+    if report is None:
+        report = ValidationReport(report_date=report_date, benchmark_symbol=BENCHMARK_SYMBOL)
+    report.generated_at = _now()
+    report.funnel_json = _json_ready(dict(summary["funnel"]))
+    report.forecast_metrics_json = _json_ready(dict(summary["forecast_metrics"]))
+    report.shadow_portfolio_json = _json_ready(dict(summary["shadow_portfolio"]))
+    report.metadata_json = _json_ready({
+        "lookback_days": summary["lookback_days"],
+        "connector_status": summary["connector_status"],
+    })
+    session.add(report)
+    session.commit()
+    session.refresh(report)
+    return report
+
+
+def build_recommendation_snapshot_export(session: Session) -> str:
+    buffer = StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(
+        [
+            "snapshot_id",
+            "symbol",
+            "generated_at",
+            "action",
+            "conviction_score",
+            "confidence_score",
+            "reference_price",
+            "benchmark_symbol",
+            "benchmark_reference_price",
+            "latest_event_id",
+            "model_version",
+        ]
+    )
+    snapshots = list(
+        session.scalars(
+            _recommendation_query().options(selectinload(RecommendationSnapshot.security))
+        )
+    )
+    for snapshot in snapshots:
+        writer.writerow(
+            [
+                snapshot.id,
+                snapshot.security.symbol,
+                snapshot.generated_at.isoformat(),
+                snapshot.action,
+                snapshot.conviction_score,
+                snapshot.confidence_score,
+                snapshot.reference_price,
+                snapshot.benchmark_symbol,
+                snapshot.benchmark_reference_price,
+                snapshot.latest_event_id or "",
+                snapshot.model_version,
+            ]
+        )
+    return buffer.getvalue()
+
+
+def build_validation_report_export(session: Session) -> str:
+    buffer = StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(
+        [
+            "report_date",
+            "generated_at",
+            "benchmark_symbol",
+            "active_user_count",
+            "signup_completed",
+            "checkout_started",
+            "checkout_completed",
+            "resolved_outcomes",
+            "open_outcomes",
+            "shadow_open_positions",
+            "shadow_average_excess_return_pct",
+        ]
+    )
+    for report in list_validation_reports(session):
+        writer.writerow(
+            [
+                report.report_date,
+                report.generated_at.isoformat(),
+                report.benchmark_symbol,
+                report.funnel_json.get("active_user_count", 0),
+                report.funnel_json.get("counts", {}).get("signup_completed", 0),
+                report.funnel_json.get("counts", {}).get("checkout_started", 0),
+                report.funnel_json.get("counts", {}).get("checkout_completed", 0),
+                report.forecast_metrics_json.get("resolved_outcomes", 0),
+                report.forecast_metrics_json.get("open_outcomes", 0),
+                report.shadow_portfolio_json.get("open_positions", 0),
+                report.shadow_portfolio_json.get("average_excess_return_pct", 0.0),
+            ]
+        )
+    return buffer.getvalue()
+
+
 def create_or_update_trial_state(session: Session, user: User, settings: Settings) -> SubscriptionState:
     subscription = get_subscription_state(user)
     if subscription.status == "free":
@@ -730,13 +1163,15 @@ def refresh_market_state(session: Session, settings: Settings) -> None:
     refresh_runtime_connector_states(session, settings)
     refreshed_symbols: list[str] = []
     created_events = 0
+    benchmark_reference_price = _benchmark_quote_price(settings)
     for security in list_reference_universe(session):
         refresh_security_quote(session, settings, security)
         created_events += ingest_candidate_events(session, settings, security)
-        rebuild_security_recommendation(session, settings, security)
+        rebuild_security_recommendation(session, settings, security, benchmark_reference_price=benchmark_reference_price)
         refreshed_symbols.append(security.symbol)
     rebuild_all_user_recommendations(session)
     backtest = refresh_backtest(session)
+    validation_report = refresh_validation_report(session, settings)
     update_connector_state(
         session,
         "market_refresh",
@@ -747,6 +1182,7 @@ def refresh_market_state(session: Session, settings: Settings) -> None:
             "refreshed_symbols": refreshed_symbols,
             "created_events": created_events,
             "backtest_run_id": backtest.id,
+            "validation_report_id": validation_report.id,
         },
     )
 

@@ -13,6 +13,7 @@ from app.billing import create_checkout_session, create_portal_session, handle_w
 from app.celery_app import celery_app
 from app.data_sources import FinnhubClient, SecEdgarClient, TwelveDataClient
 from app.notifications import send_password_reset_email
+from app.activity_service import summarize_analytics_events
 from app.services import build_system_status, seed_demo_content, seed_universe
 from app.tasks import refresh_market_state_task
 from app.user_service import create_user, get_subscription_state
@@ -147,6 +148,11 @@ def test_billing_happy_path_with_stubbed_stripe(session, settings, monkeypatch):
     }
     assert handle_webhook_event(session, configured, payload=json.dumps(deleted_event).encode("utf-8"), signature=None)["status"] == "processed"
 
+    analytics = summarize_analytics_events(session, lookback_days=30)
+    assert analytics["counts"]["checkout_completed"] >= 1
+    assert analytics["counts"]["subscription_synced"] >= 1
+    assert analytics["counts"]["subscription_canceled"] >= 1
+
 
 def test_task_entrypoint_runs_with_eager_settings(monkeypatch, settings):
     called = {"count": 0}
@@ -226,4 +232,12 @@ def test_alembic_upgrade_head_creates_market_tables(tmp_path: Path):
 
     with sqlite3.connect(database_path) as connection:
         tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert {"users", "events", "recommendation_snapshots", "user_recommendations", "backtest_runs"}.issubset(tables)
+    assert {
+        "users",
+        "events",
+        "recommendation_snapshots",
+        "recommendation_outcomes",
+        "validation_reports",
+        "user_recommendations",
+        "backtest_runs",
+    }.issubset(tables)

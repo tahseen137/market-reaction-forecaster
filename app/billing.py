@@ -6,6 +6,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.activity_service import record_analytics_event
 from app.config import Settings
 from app.models import SubscriptionState, User
 from app.user_service import get_subscription_state, sync_role_with_subscription
@@ -102,6 +103,14 @@ def handle_webhook_event(session: Session, settings: Settings, *, payload: bytes
         sync_role_with_subscription(user)
         session.add_all([subscription, user])
         session.commit()
+        record_analytics_event(
+            session,
+            event_name="checkout_completed",
+            actor=user,
+            entity_type="billing",
+            entity_id=subscription.id,
+            details={"event_type": event_type},
+        )
         return {"status": "processed"}
     if event_type in {"customer.subscription.updated", "customer.subscription.created"}:
         if user_id is None:
@@ -109,7 +118,15 @@ def handle_webhook_event(session: Session, settings: Settings, *, payload: bytes
         user = session.get(User, user_id)
         if user is None:
             return {"status": "ignored"}
-        _upsert_subscription_from_payload(session, user, data_object)
+        subscription = _upsert_subscription_from_payload(session, user, data_object)
+        record_analytics_event(
+            session,
+            event_name="subscription_synced",
+            actor=user,
+            entity_type="billing",
+            entity_id=subscription.id,
+            details={"event_type": event_type, "status": subscription.status, "plan_key": subscription.plan_key},
+        )
         return {"status": "processed"}
     if event_type == "customer.subscription.deleted":
         if user_id is None:
@@ -123,5 +140,13 @@ def handle_webhook_event(session: Session, settings: Settings, *, payload: bytes
         sync_role_with_subscription(user)
         session.add_all([subscription, user])
         session.commit()
+        record_analytics_event(
+            session,
+            event_name="subscription_canceled",
+            actor=user,
+            entity_type="billing",
+            entity_id=subscription.id,
+            details={"event_type": event_type},
+        )
         return {"status": "processed"}
     return {"status": "ignored"}

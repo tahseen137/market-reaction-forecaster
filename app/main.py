@@ -20,7 +20,7 @@ from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from app.activity_service import list_activity_events, record_activity
+from app.activity_service import list_activity_events, record_activity, record_analytics_event
 from app.auth import (
     auth_required,
     clear_session,
@@ -71,8 +71,11 @@ from app.schemas import (
 )
 from app.services import (
     build_dashboard,
+    build_recommendation_snapshot_export,
     build_model_portfolio,
     build_system_status,
+    build_validation_report_export,
+    build_validation_summary,
     create_event,
     create_watchlist,
     default_profile_payload,
@@ -82,6 +85,7 @@ from app.services import (
     get_recommendation_feed,
     list_events,
     list_reference_universe,
+    list_validation_reports,
     list_watchlists,
     rebuild_all_user_recommendations,
     rebuild_model_portfolio_for_user,
@@ -89,6 +93,7 @@ from app.services import (
     rebuild_user_recommendations_for_user,
     refresh_backtest,
     refresh_market_state,
+    refresh_validation_report,
     refresh_security_quote,
     seed_demo_content,
     seed_universe,
@@ -224,6 +229,55 @@ def _billing_urls(request: Request) -> tuple[str, str, str]:
     return (f"{base}/account?checkout=success", f"{base}/pricing?checkout=cancelled", f"{base}/account")
 
 
+def _track_analytics(
+    session: Session,
+    request: Request,
+    *,
+    event_name: str,
+    user: User | None = None,
+    entity_type: str = "analytics",
+    entity_id: str | None = None,
+    details: dict[str, object] | None = None,
+) -> None:
+    payload = {
+        "path": request.url.path,
+        "referrer": request.headers.get("referer"),
+        "user_agent": request.headers.get("user-agent"),
+    }
+    if details:
+        payload.update(details)
+    record_analytics_event(
+        session,
+        event_name=event_name,
+        actor=user,
+        actor_username=user.username if user else "anonymous",
+        entity_type=entity_type,
+        entity_id=entity_id,
+        details=payload,
+    )
+
+
+def _track_page_view(
+    session: Session,
+    request: Request,
+    *,
+    page_name: str,
+    user: User | None = None,
+    entity_type: str = "page",
+    entity_id: str | None = None,
+    details: dict[str, object] | None = None,
+) -> None:
+    _track_analytics(
+        session,
+        request,
+        event_name=f"{page_name}_viewed",
+        user=user,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        details=details,
+    )
+
+
 def _payload(request: Request, settings: Settings, user: User | None, *, page: str, title: str, body_class: str = "app-shell", **data: Any) -> dict[str, Any]:
     payload = page_context(
         request=request,
@@ -259,12 +313,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     create_or_update_profile(session, admin_user, default_profile_payload())
                 if admin_user.disclosures_acknowledged_at is None:
                     acknowledge_disclosures(session, admin_user)
-                rebuild_user_recommendations_for_user(session, admin_user)
-                rebuild_model_portfolio_for_user(session, admin_user)
-            rebuild_all_user_recommendations(session)
-            refresh_backtest(session)
-            build_system_status(session, resolved_settings)
-            app.state.auth_required = bool(list_users(session))
+            rebuild_user_recommendations_for_user(session, admin_user)
+            rebuild_model_portfolio_for_user(session, admin_user)
+        rebuild_all_user_recommendations(session)
+        refresh_backtest(session)
+        build_system_status(session, resolved_settings)
+        refresh_validation_report(session, resolved_settings)
+        app.state.auth_required = bool(list_users(session))
         yield
         database_state.engine.dispose()
 
@@ -390,6 +445,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> HTMLResponse:
         feed = [RecommendationFeedEntry.model_validate(item) for item in get_recommendation_feed(session)]
         backtest = _backtest_read(get_latest_backtest(session))
+        _track_page_view(session, request, page_name="landing", user=current_user)
         return templates.TemplateResponse(
             request,
             "landing.html",
@@ -414,6 +470,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         current_user: User | None = Depends(get_current_user),
     ) -> HTMLResponse:
         backtest = _backtest_read(get_latest_backtest(session))
+        _track_page_view(session, request, page_name="pricing", user=current_user)
         return templates.TemplateResponse(
             request,
             "pricing.html",
@@ -456,6 +513,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         feed_user = current_user if unlocked else None
         dashboard = _dashboard_read(build_dashboard(session, feed_user))
         feed = [RecommendationFeedEntry.model_validate(item) for item in get_recommendation_feed(session, user=feed_user)]
+        _track_page_view(session, request, page_name="dashboard", user=current_user)
         return templates.TemplateResponse(
             request,
             "app.html",
@@ -480,6 +538,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         current_user: User = Depends(require_page_user),
     ) -> HTMLResponse:
         watchlists = [_watchlist_read(item) for item in (list_watchlists(session, current_user) if has_paid_access(current_user) else [])]
+        _track_page_view(session, request, page_name="watchlists", user=current_user)
         return templates.TemplateResponse(
             request,
             "app.html",
@@ -504,6 +563,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         current_user: User = Depends(require_page_user),
     ) -> HTMLResponse:
         events = [_event_read(item) for item in list_events(session, limit=40)]
+        _track_page_view(session, request, page_name="events", user=current_user)
         return templates.TemplateResponse(
             request,
             "app.html",
@@ -522,6 +582,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if event is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
         event_read = _event_read(event)
+        _track_page_view(session, request, page_name="event_detail", user=current_user, entity_type="event", entity_id=event.id, details={"symbol": event.security.symbol})
         return templates.TemplateResponse(
             request,
             "app.html",
@@ -540,6 +601,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if detail is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recommendation not found")
         recommendation = RecommendationDetailRead.model_validate(detail)
+        _track_page_view(session, request, page_name="recommendation", user=current_user, entity_type="security", entity_id=symbol.upper(), details={"action": recommendation.action})
         return templates.TemplateResponse(
             request,
             "app.html",
@@ -563,6 +625,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         current_user: User = Depends(require_page_user),
     ) -> HTMLResponse:
         backtest = _backtest_read(get_latest_backtest(session))
+        _track_page_view(session, request, page_name="backtests", user=current_user)
         return templates.TemplateResponse(
             request,
             "app.html",
@@ -586,6 +649,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         current_user: User = Depends(require_page_user),
     ) -> HTMLResponse:
         portfolio = ModelPortfolioRead.model_validate(build_model_portfolio(session, current_user))
+        _track_page_view(session, request, page_name="portfolio", user=current_user)
         return templates.TemplateResponse(
             request,
             "app.html",
@@ -619,6 +683,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         ]
         system_status = _system_status_read(build_system_status(session, settings))
+        _track_page_view(session, request, page_name="account", user=current_user)
         return templates.TemplateResponse(
             request,
             "app.html",
@@ -652,6 +717,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
         users = [_user_read(user) for user in list_users(session)]
         activity = [_activity_read(item) for item in list_activity_events(session, limit=40)]
+        _track_page_view(session, request, page_name="admin_users", user=current_user)
         return templates.TemplateResponse(
             request,
             "app.html",
@@ -664,6 +730,47 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 users=users,
                 activity=activity,
                 page_data={"users": [item.model_dump(mode="json") for item in users], "activity": [item.model_dump(mode="json") for item in activity]},
+            ),
+        )
+
+    @app.get("/admin/validation", response_class=HTMLResponse)
+    def admin_validation_page(
+        request: Request,
+        session: Session = Depends(get_session),
+        settings: Settings = Depends(get_runtime_settings),
+        current_user: User = Depends(require_page_user),
+    ) -> HTMLResponse:
+        if not can_manage_users(current_user):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+        refresh_validation_report(session, settings)
+        validation_summary = build_validation_summary(session, settings)
+        validation_reports = list_validation_reports(session, limit=14)
+        _track_page_view(session, request, page_name="validation_dashboard", user=current_user)
+        return templates.TemplateResponse(
+            request,
+            "app.html",
+            _payload(
+                request,
+                settings,
+                current_user,
+                page="admin-validation",
+                title="Admin validation",
+                validation_summary=validation_summary,
+                validation_reports=validation_reports,
+                page_data={
+                    "validation_summary": validation_summary,
+                    "validation_reports": [
+                        {
+                            "report_date": report.report_date,
+                            "generated_at": report.generated_at,
+                            "benchmark_symbol": report.benchmark_symbol,
+                            "funnel_json": report.funnel_json,
+                            "forecast_metrics_json": report.forecast_metrics_json,
+                            "shadow_portfolio_json": report.shadow_portfolio_json,
+                        }
+                        for report in validation_reports
+                    ],
+                },
             ),
         )
 
@@ -687,6 +794,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
         set_authenticated_user_session(request, user)
         record_activity(session, actor=user, action="user.signup", entity_type="user", entity_id=user.id, description=f"{user.username} created an account", details={"plan": "pro_trial"})
+        _track_analytics(session, request, event_name="signup_completed", user=user, entity_type="user", entity_id=user.id, details={"plan": "pro_trial"})
         return _session_status(request, user, settings)
 
     @app.post("/api/session/login", response_model=SessionStatusResponse)
@@ -702,6 +810,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         user = result.user
         set_authenticated_user_session(request, user)
         record_activity(session, actor=user, action="session.login", entity_type="user", entity_id=user.id, description=f"{user.username} logged in", details={"source": "web"})
+        _track_analytics(session, request, event_name="login_completed", user=user, entity_type="user", entity_id=user.id, details={"source": "web"})
         return _session_status(request, user, settings, next_path=payload.next_path)
 
     @app.post("/api/session/logout", status_code=status.HTTP_204_NO_CONTENT)
@@ -754,6 +863,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         rebuild_user_recommendations_for_user(session, current_user)
         rebuild_model_portfolio_for_user(session, current_user)
         record_activity(session, actor=current_user, action="profile.updated", entity_type="user_profile", entity_id=profile.id, description=f"{current_user.username} updated onboarding preferences", details=payload.model_dump())
+        _track_analytics(session, request, event_name="profile_saved", user=current_user, entity_type="user_profile", entity_id=profile.id, details={"goal_primary": payload.goal_primary, "risk_tolerance": payload.risk_tolerance})
         return UserProfileRead.model_validate(profile)
 
     @app.patch("/api/profile", response_model=UserProfileRead)
@@ -767,6 +877,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         rebuild_user_recommendations_for_user(session, current_user)
         rebuild_model_portfolio_for_user(session, current_user)
         record_activity(session, actor=current_user, action="profile.disclosures_acknowledged", entity_type="user", entity_id=current_user.id, description=f"{current_user.username} acknowledged research and risk disclosures", details={})
+        _track_analytics(session, request, event_name="disclosures_acknowledged", user=current_user, entity_type="user", entity_id=current_user.id, details={})
         return _session_status(request, current_user, settings)
 
     @app.get("/api/account/subscription", response_model=SubscriptionRead)
@@ -791,23 +902,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return _system_status_read(build_system_status(session, settings))
 
     @app.post("/api/billing/create-checkout-session")
-    def create_checkout_session_api(payload: BillingRequest, request: Request, current_user: User = Depends(require_authenticated_api), settings: Settings = Depends(get_runtime_settings)) -> dict[str, str]:
+    def create_checkout_session_api(
+        payload: BillingRequest,
+        request: Request,
+        session: Session = Depends(get_session),
+        current_user: User = Depends(require_authenticated_api),
+        settings: Settings = Depends(get_runtime_settings),
+    ) -> dict[str, str]:
         _require_csrf(request)
         success_url, cancel_url, _ = _billing_urls(request)
         try:
             url = create_checkout_session(settings, current_user, billing_cycle=payload.billing_cycle, success_url=success_url, cancel_url=cancel_url)
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+        _track_analytics(session, request, event_name="checkout_started", user=current_user, entity_type="billing", entity_id=current_user.id, details={"billing_cycle": payload.billing_cycle})
         return {"url": url}
 
     @app.post("/api/billing/create-portal-session")
-    def create_portal_session_api(request: Request, current_user: User = Depends(require_authenticated_api), settings: Settings = Depends(get_runtime_settings)) -> dict[str, str]:
+    def create_portal_session_api(
+        request: Request,
+        session: Session = Depends(get_session),
+        current_user: User = Depends(require_authenticated_api),
+        settings: Settings = Depends(get_runtime_settings),
+    ) -> dict[str, str]:
         _require_csrf(request)
         _, _, return_url = _billing_urls(request)
         try:
             url = create_portal_session(settings, get_subscription_state(current_user), return_url=return_url)
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+        _track_analytics(session, request, event_name="billing_portal_opened", user=current_user, entity_type="billing", entity_id=current_user.id, details={})
         return {"url": url}
 
     @app.post("/api/billing/webhook")
@@ -881,6 +1005,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         rebuild_security_recommendation(session, settings, event.security)
         rebuild_all_user_recommendations(session)
         refresh_backtest(session)
+        refresh_validation_report(session, settings)
         record_activity(session, actor=current_user, action="event.created", entity_type="event", entity_id=event.id, description=f"{current_user.username} created a manual event for {event.security.symbol}", details={"symbol": event.security.symbol, "event_type": event.event_type})
         return _event_read(event)
 
@@ -893,6 +1018,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         _require_csrf(request)
         watchlist = create_watchlist(session, current_user, name=payload.name, symbols=payload.symbols)
         record_activity(session, actor=current_user, action="watchlist.created", entity_type="watchlist", entity_id=watchlist.id, description=f"{current_user.username} created watchlist {watchlist.name}", details={"symbols": payload.symbols})
+        _track_analytics(session, request, event_name="watchlist_created", user=current_user, entity_type="watchlist", entity_id=watchlist.id, details={"symbols": payload.symbols, "symbol_count": len(payload.symbols)})
         return _watchlist_read(watchlist)
 
     @app.get("/api/backtests/summary", response_model=BacktestRunRead)
@@ -927,6 +1053,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/activity", response_model=list[ActivityEventRead])
     def activity_api(session: Session = Depends(get_session), current_user: User = Depends(require_admin_api)) -> list[ActivityEventRead]:
         return [_activity_read(item) for item in list_activity_events(session, limit=75)]
+
+    @app.get("/api/admin/validation/summary")
+    def admin_validation_summary_api(
+        session: Session = Depends(get_session),
+        settings: Settings = Depends(get_runtime_settings),
+        current_user: User = Depends(require_admin_api),
+    ) -> dict[str, object]:
+        refresh_validation_report(session, settings)
+        return build_validation_summary(session, settings)
+
+    @app.get("/api/admin/validation/recommendation-snapshots.csv", response_class=PlainTextResponse)
+    def admin_validation_recommendation_export_api(
+        session: Session = Depends(get_session),
+        current_user: User = Depends(require_admin_api),
+    ) -> PlainTextResponse:
+        return PlainTextResponse(build_recommendation_snapshot_export(session), media_type="text/csv")
+
+    @app.get("/api/admin/validation/reports.csv", response_class=PlainTextResponse)
+    def admin_validation_report_export_api(
+        session: Session = Depends(get_session),
+        settings: Settings = Depends(get_runtime_settings),
+        current_user: User = Depends(require_admin_api),
+    ) -> PlainTextResponse:
+        refresh_validation_report(session, settings)
+        return PlainTextResponse(build_validation_report_export(session), media_type="text/csv")
 
     @app.get("/api/admin/users", response_model=list[UserRead])
     def admin_users_api(session: Session = Depends(get_session), current_user: User = Depends(require_admin_api)) -> list[UserRead]:
