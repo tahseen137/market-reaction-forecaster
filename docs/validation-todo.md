@@ -27,11 +27,11 @@ We believe self-directed investors will pay for a focused large-cap tech product
 
 ### Forecast validation
 
-- [ ] Every recommendation snapshot is stored with timestamp, evidence, model version, and profile context
-- [ ] A daily shadow portfolio is generated and archived
-- [ ] Recommendation outcomes are compared with `SOXX` and a simple baseline
-- [ ] `1`, `5`, and `20` day results are measured separately
-- [ ] Calibration is tracked so high-confidence calls are meaningfully better than low-confidence calls
+- [x] Every recommendation snapshot is stored with timestamp, evidence, model version, and profile context
+- [x] A daily shadow portfolio is generated and archived
+- [x] Recommendation outcomes are compared with `SOXX` and a simple baseline
+- [x] `1`, `5`, and `20` day results are measured separately
+- [x] Calibration is tracked so high-confidence calls are meaningfully better than low-confidence calls
 - [ ] Buy / hold / sell outputs outperform a naive baseline on at least one useful metric
 
 ## Validation metrics
@@ -70,18 +70,18 @@ We do not validate performance against vibes. We validate against baselines.
 
 ### Phase 1: Instrumentation and data hygiene
 
-- [ ] add a daily validation export of all recommendation snapshots
+- [x] add a daily validation export of all recommendation snapshots
 - [ ] add a daily shadow-portfolio export with entry, exit, and PnL
-- [ ] add basic funnel tracking for signup, onboarding, watchlist, checkout
+- [x] add basic funnel tracking for signup, onboarding, watchlist, checkout
 - [ ] add a manual feedback capture field on recommendation detail pages
-- [ ] create a validation spreadsheet or dashboard from the exports
+- [x] create a validation spreadsheet or dashboard from the exports
 
 ### Phase 2: Offline forecast validation
 
-- [ ] replay the stored event set and score results for `1`, `5`, and `20` day horizons
+- [x] replay the stored event set and score results for `1`, `5`, and `20` day horizons
 - [ ] compare model outputs against all baselines
 - [ ] split results by event type
-- [ ] split results by confidence bucket
+- [x] split results by confidence bucket
 - [ ] identify where the model is noisy, overconfident, or unhelpful
 
 ### Phase 3: Live shadow validation
@@ -120,12 +120,19 @@ We should consider the thesis validated only if both product and forecast signal
 
 ## Immediate next actions
 
-- [ ] enable product analytics and checkout funnel tracking
-- [ ] log all recommendation snapshots for validation review
+- [x] enable product analytics and checkout funnel tracking
+- [x] log all recommendation snapshots for validation review
 - [ ] run the first `14` day live shadow portfolio
 - [ ] recruit the first `10` testers
 - [ ] conduct the first `5` feedback calls
 - [ ] review results and decide whether to narrow the universe, event types, or recommendation style
+
+## Current tooling
+
+- Admin validation dashboard: `/admin/validation`
+- Summary API: `/api/admin/validation/summary`
+- Snapshot export: `/api/admin/validation/recommendation-snapshots.csv`
+- Daily report export: `/api/admin/validation/reports.csv`
 
 ## Notes
 

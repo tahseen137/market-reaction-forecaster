@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from tests.conftest import acknowledge, login, signup
+
 
 def test_admin_user_management_and_manual_event(client, admin_headers):
     users = client.get("/api/admin/users")
@@ -58,3 +60,41 @@ def test_billing_endpoints_require_configuration(client, admin_headers):
 
     portal = client.post("/api/billing/create-portal-session", headers=admin_headers)
     assert portal.status_code == 503
+
+
+def test_admin_validation_dashboard_and_exports(client):
+    _, user_headers = signup(client, "validator")
+    acknowledge(client, user_headers)
+
+    recommendation = client.get("/recommendations/NVDA")
+    assert recommendation.status_code == 200
+
+    watchlist = client.post("/api/watchlists", headers=user_headers, json={"name": "Quality Basket", "symbols": ["NVDA", "AMD"]})
+    assert watchlist.status_code == 201
+
+    admin_headers = login(client)
+
+    dashboard = client.get("/admin/validation")
+    assert dashboard.status_code == 200
+    assert "Validation dashboard" in dashboard.text
+
+    summary = client.get("/api/admin/validation/summary")
+    assert summary.status_code == 200
+    payload = summary.json()
+    assert payload["funnel"]["counts"]["signup_completed"] >= 1
+    assert payload["funnel"]["counts"]["recommendation_viewed"] >= 1
+    assert payload["funnel"]["counts"]["watchlist_created"] >= 1
+    assert "forecast_metrics" in payload
+    assert "shadow_portfolio" in payload
+
+    snapshots = client.get("/api/admin/validation/recommendation-snapshots.csv")
+    assert snapshots.status_code == 200
+    assert "snapshot_id,symbol" in snapshots.text
+
+    reports = client.get("/api/admin/validation/reports.csv")
+    assert reports.status_code == 200
+    assert "report_date,generated_at" in reports.text
+
+    activity = client.get("/api/activity", headers=admin_headers)
+    assert activity.status_code == 200
+    assert all(not item["action"].startswith("analytics.") for item in activity.json())

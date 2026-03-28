@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
+from app.models import RecommendationOutcome
 from app.reporting import build_backtest_markdown, build_recommendation_markdown
 from app.schemas import BacktestRunRead, RecommendationDetailRead
 from app.scoring import build_backtest_metrics, build_base_recommendation, personalize_recommendation
-from app.services import default_profile_payload, get_recommendation_feed
+from app.services import default_profile_payload, get_recommendation_feed, refresh_validation_report
 
 
 def test_scoring_outputs_actions_ranges_and_personalization():
@@ -100,3 +103,38 @@ def test_services_helpers_return_stable_defaults(session):
     symbols = [item["symbol"] for item in feed]
     assert symbols
     assert len(symbols) == len(set(symbols))
+
+
+def test_validation_report_creates_and_resolves_outcomes(session, settings, monkeypatch):
+    class StubQuoteClient:
+        def __init__(self, runtime_settings):
+            self.runtime_settings = runtime_settings
+
+        def get_quote(self, symbol: str):
+            now = datetime.now(UTC)
+            if symbol == "QQQ":
+                return type("Quote", (), {"symbol": symbol, "price": 500.0, "day_change_pct": 0.8, "as_of": now})()
+            return type("Quote", (), {"symbol": symbol, "price": 250.0, "day_change_pct": 1.2, "as_of": now})()
+
+    monkeypatch.setattr("app.services.TwelveDataClient", StubQuoteClient)
+
+    first_report = refresh_validation_report(session, settings)
+    assert first_report.funnel_json["counts"] == {}
+
+    outcomes = session.query(RecommendationOutcome).all()  # type: ignore[attr-defined]
+    assert outcomes
+
+    due_outcome = outcomes[0]
+    due_outcome.reference_price = 200.0
+    due_outcome.benchmark_reference_price = 400.0
+    due_outcome.target_at = datetime.now(UTC) - timedelta(days=1)
+    session.add(due_outcome)
+    session.commit()
+
+    refreshed_report = refresh_validation_report(session, settings)
+    session.refresh(due_outcome)
+
+    assert due_outcome.status == "resolved"
+    assert due_outcome.observed_return_pct == 25.0
+    assert refreshed_report.forecast_metrics_json["resolved_outcomes"] >= 1
+    assert "average_excess_return_pct" in refreshed_report.shadow_portfolio_json
