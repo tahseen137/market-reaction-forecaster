@@ -50,14 +50,14 @@ Cut through earnings noise, company news, and macro headlines with explicit call
   - public market pages
   - limited watchlist visibility
 - `Pro Monthly`
-  - `$39/month`
+  - `$19/month`
   - 7-day free trial
   - live recommendation feed
   - full watchlists
   - model portfolio
   - backtests and report exports
 - `Pro Annual`
-  - `$390/year`
+  - `$190/year`
   - 7-day free trial
   - same feature set as monthly
   - two months free versus monthly billing

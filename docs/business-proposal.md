@@ -39,10 +39,10 @@ This is not a brokerage and not a generic chatbot. It is a consumer intelligence
   - delayed sample feed
   - public pages
 - `Pro Monthly`
-  - `$39/month`
+- `$19/month`
   - 7-day trial
 - `Pro Annual`
-  - `$390/year`
+- `$190/year`
   - 7-day trial
 
 ## Why it can win
