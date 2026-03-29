@@ -18,6 +18,10 @@ The launch product is deliberately aggressive:
   - event classification
   - price and momentum context
   - analog density
+  - Cassandra overlays:
+    - MiroFish-style persona sentiment simulation
+    - chaos / predictability-horizon analysis
+    - AutoResearch adaptive weight profile
   - risk-profile adjustment
 - Manual event entry plus ingestion adapters for:
   - SEC EDGAR
@@ -50,11 +54,14 @@ market-reaction-forecaster/
 
 ## Quick start
 
+Recommended: use `uv` so the repo can bootstrap Python 3.11 even if your machine defaults to an older interpreter.
+
 ```bash
-python -m venv .venv
-.venv\Scripts\activate
-pip install -e ".[dev]"
-copy .env.example .env
+uv python install 3.11
+uv venv --python 3.11 .venv
+source .venv/bin/activate
+uv pip install '.[dev]'
+cp .env.example .env
 alembic upgrade head
 uvicorn app.main:app --reload
 ```
@@ -76,6 +83,20 @@ Open [http://127.0.0.1:8000](http://127.0.0.1:8000).
 - `POSTMARK_FROM_EMAIL`
 
 See [.env.example](./.env.example) for the full list.
+
+## Cassandra MVP additions
+
+- Recommendation detail/report/UI now expose:
+  - MiroFish-style persona sentiment artifacts
+  - chaos score + predictability horizon
+  - applied AutoResearch weight profile
+- AutoResearch loop writes a deterministic artifact to `data/uploads/cassandra/autoresearch-latest.json` (or your configured uploads dir).
+- Run it manually:
+
+```bash
+source .venv/bin/activate
+python -m app.autoresearch_cli
+```
 
 ## Tests
 

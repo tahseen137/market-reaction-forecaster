@@ -9,6 +9,7 @@ from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.activity_service import summarize_analytics_events
+from app.autoresearch import load_autoresearch_artifact, load_weight_overrides, run_autoresearch_loop
 from app.config import Settings
 from app.data_sources import FinnhubClient, NormalizedEventCandidate, RssFeedClient, SecEdgarClient, TwelveDataClient, hash_content
 from app.models import (
@@ -544,6 +545,7 @@ def rebuild_security_recommendation(
             ),
         )
     analog_count = _analog_count(session, security.id, latest_event.event_type)
+    weight_overrides, weight_profile_name = load_weight_overrides(settings)
     base = build_base_recommendation(
         symbol=security.symbol,
         company_name=security.company_name,
@@ -556,6 +558,8 @@ def rebuild_security_recommendation(
         analog_count=analog_count,
         source_status="real-time" if settings.twelve_data_api_key else "delayed",
         benchmark_symbol=BENCHMARK_SYMBOL,
+        weight_overrides=weight_overrides,
+        weight_profile_name=weight_profile_name,
     )
     snapshot = RecommendationSnapshot(
         security_id=security.id,
@@ -574,6 +578,7 @@ def rebuild_security_recommendation(
         invalidation_conditions=base.invalidation_conditions,
         factor_scores=base.factor_scores,
         horizon_ranges=base.horizon_ranges,
+        analysis_artifacts=base.analysis_artifacts,
     )
     session.add(snapshot)
     session.commit()
@@ -606,6 +611,7 @@ def rebuild_user_recommendations_for_user(session: Session, user: User) -> list[
     session.query(UserRecommendation).filter(UserRecommendation.user_id == user.id).delete()  # type: ignore[attr-defined]
     recommendations: list[UserRecommendation] = []
     for snapshot in snapshots:
+        snapshot_weights = snapshot.analysis_artifacts.get("weights", {}) if snapshot.analysis_artifacts else {}
         personalized = personalize_recommendation(
             build_base_recommendation(
                 symbol=snapshot.security.symbol,
@@ -619,6 +625,8 @@ def rebuild_user_recommendations_for_user(session: Session, user: User) -> list[
                 analog_count=snapshot.analog_sample_size,
                 source_status=snapshot.source_status,
                 benchmark_symbol=snapshot.benchmark_symbol,
+                weight_overrides=snapshot_weights.get("overrides") if isinstance(snapshot_weights, dict) else None,
+                weight_profile_name=snapshot_weights.get("profile_name", "baseline") if isinstance(snapshot_weights, dict) else "baseline",
             ),
             goal_primary=profile.goal_primary,
             risk_tolerance=profile.risk_tolerance,
@@ -677,6 +685,8 @@ def _latest_snapshot_for_symbol(session: Session, symbol: str) -> Recommendation
 
 def _recommendation_to_feed_entry(snapshot: RecommendationSnapshot, user_recommendation: UserRecommendation | None, *, delayed_sample: bool) -> dict[str, object]:
     latest_event = snapshot.latest_event
+    analysis_artifacts = snapshot.analysis_artifacts or {}
+    weights = analysis_artifacts.get("weights", {}) if isinstance(analysis_artifacts, dict) else {}
     return {
         "symbol": snapshot.security.symbol,
         "company_name": snapshot.security.company_name,
@@ -697,6 +707,9 @@ def _recommendation_to_feed_entry(snapshot: RecommendationSnapshot, user_recomme
         "latest_event_id": snapshot.latest_event_id,
         "factor_scores": snapshot.factor_scores,
         "horizon_ranges": snapshot.horizon_ranges,
+        "mirofish_analysis": analysis_artifacts.get("mirofish") if isinstance(analysis_artifacts, dict) else None,
+        "chaos_analysis": analysis_artifacts.get("chaos") if isinstance(analysis_artifacts, dict) else None,
+        "weight_profile_name": weights.get("profile_name") if isinstance(weights, dict) else None,
         "rationale": user_recommendation.rationale if user_recommendation else None,
         "latest_headline": latest_event.headline if latest_event else None,
         "delayed_sample": delayed_sample,
@@ -796,7 +809,7 @@ def rebuild_model_portfolio_for_user(session: Session, user: User) -> list[Portf
             current_price=security.last_price,
             allocation_pct=round(allocation, 2),
             model_action=recommendation.action,
-            horizon_days=20,
+            horizon_days=int(recommendation.recommendation_snapshot.factor_scores.get("predictability_horizon_days", 20.0)),
             rationale=recommendation.rationale,
             pnl_pct=0.0,
         )
@@ -1008,6 +1021,7 @@ def build_validation_summary(session: Session, settings: Settings, *, lookback_d
         "confidence_buckets": confidence_buckets,
     }
     shadow_portfolio = build_shadow_portfolio_summary(session, settings)
+    autoresearch_artifact = load_autoresearch_artifact(settings)
 
     latest_report = get_latest_validation_report(session)
     return {
@@ -1018,6 +1032,7 @@ def build_validation_summary(session: Session, settings: Settings, *, lookback_d
         "funnel": analytics,
         "forecast_metrics": forecast_metrics,
         "shadow_portfolio": shadow_portfolio,
+        "autoresearch": autoresearch_artifact,
         "latest_report_id": latest_report.id if latest_report else None,
         "connector_status": build_system_status(session, settings),
     }
@@ -1026,6 +1041,7 @@ def build_validation_summary(session: Session, settings: Settings, *, lookback_d
 def refresh_validation_report(session: Session, settings: Settings) -> ValidationReport:
     ensure_validation_outcomes_for_all_snapshots(session)
     resolve_due_recommendation_outcomes(session, settings)
+    autoresearch_artifact = run_autoresearch_loop(session, settings)
     summary = build_validation_summary(session, settings)
     report_date = str(summary["report_date"])
     report = session.scalars(select(ValidationReport).where(ValidationReport.report_date == report_date)).first()
@@ -1038,6 +1054,7 @@ def refresh_validation_report(session: Session, settings: Settings) -> Validatio
     report.metadata_json = _json_ready({
         "lookback_days": summary["lookback_days"],
         "connector_status": summary["connector_status"],
+        "autoresearch": autoresearch_artifact,
     })
     session.add(report)
     session.commit()

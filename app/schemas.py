@@ -205,6 +205,34 @@ class HorizonRangeRead(BaseModel):
     expected_return_high: float
 
 
+class PersonaSignalRead(BaseModel):
+    name: str
+    archetype: str
+    sentiment_score: float
+    position_bias: str
+    confidence: float
+    rationale: str
+
+
+class MiroFishAnalysisRead(BaseModel):
+    aggregate_sentiment: float
+    aggregate_positioning: float
+    consensus_strength: float
+    dispersion: float
+    regime: str
+    explanation: str
+    personas: list[PersonaSignalRead]
+
+
+class ChaosAnalysisRead(BaseModel):
+    chaos_score: float
+    predictability_horizon_days: int
+    signal_instability: float
+    confidence_multiplier: float
+    confidence_band: str
+    explanation: str
+
+
 class RecommendationDetailRead(BaseModel):
     symbol: str
     company_name: str
@@ -225,6 +253,9 @@ class RecommendationDetailRead(BaseModel):
     latest_event_id: str | None
     factor_scores: dict[str, float]
     horizon_ranges: list[HorizonRangeRead]
+    mirofish_analysis: MiroFishAnalysisRead | None = None
+    chaos_analysis: ChaosAnalysisRead | None = None
+    weight_profile_name: str | None = None
     rationale: str | None = None
 
 
