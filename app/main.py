@@ -21,6 +21,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.activity_service import list_activity_events, record_activity, record_analytics_event
+from app.autoresearch import load_autoresearch_artifact, run_autoresearch_loop
 from app.auth import (
     auth_required,
     clear_session,
@@ -1062,6 +1063,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> dict[str, object]:
         refresh_validation_report(session, settings)
         return build_validation_summary(session, settings)
+
+    @app.get("/api/admin/cassandra/autoresearch")
+    def admin_cassandra_autoresearch_api(
+        settings: Settings = Depends(get_runtime_settings),
+        current_user: User = Depends(require_admin_api),
+    ) -> dict[str, object]:
+        artifact = load_autoresearch_artifact(settings)
+        if artifact is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="AutoResearch artifact not found")
+        return artifact
+
+    @app.post("/api/admin/cassandra/autoresearch/run")
+    def admin_cassandra_autoresearch_run_api(
+        request: Request,
+        session: Session = Depends(get_session),
+        settings: Settings = Depends(get_runtime_settings),
+        current_user: User = Depends(require_admin_api),
+    ) -> dict[str, object]:
+        _require_csrf(request)
+        return run_autoresearch_loop(session, settings)
 
     @app.get("/api/admin/validation/recommendation-snapshots.csv", response_class=PlainTextResponse)
     def admin_validation_recommendation_export_api(

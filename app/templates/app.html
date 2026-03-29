@@ -111,6 +111,26 @@
         <article><span>{{ item.horizon_days }} day</span><strong>{{ "%.2f"|format(item.expected_return_mid) }}%</strong></article>
         {% endfor %}
       </div>
+      {% if recommendation.mirofish_analysis %}
+      <h3>MiroFish sentiment simulation</h3>
+      <p><strong>Regime:</strong> {{ recommendation.mirofish_analysis.regime }} | <strong>Sentiment:</strong> {{ "%+.2f"|format(recommendation.mirofish_analysis.aggregate_sentiment) }} | <strong>Consensus:</strong> {{ "%.0f%%"|format(recommendation.mirofish_analysis.consensus_strength * 100) }}</p>
+      <p>{{ recommendation.mirofish_analysis.explanation }}</p>
+      <div class="table-card">
+        <table>
+          <thead><tr><th>Persona</th><th>Bias</th><th>Score</th><th>Confidence</th></tr></thead>
+          <tbody>
+            {% for persona in recommendation.mirofish_analysis.personas %}
+            <tr><td>{{ persona.name }}</td><td>{{ persona.position_bias }}</td><td>{{ "%+.2f"|format(persona.sentiment_score) }}</td><td>{{ "%.0f%%"|format(persona.confidence * 100) }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+      {% if recommendation.chaos_analysis %}
+      <h3>Chaos / predictability horizon</h3>
+      <p><strong>Chaos score:</strong> {{ "%.2f"|format(recommendation.chaos_analysis.chaos_score) }} | <strong>Horizon:</strong> {{ recommendation.chaos_analysis.predictability_horizon_days }} days | <strong>Band:</strong> {{ recommendation.chaos_analysis.confidence_band }}</p>
+      <p>{{ recommendation.chaos_analysis.explanation }}</p>
+      {% endif %}
     </section>
     {% elif current_page == "backtests" %}
     <section class="panel prose-panel">
@@ -211,6 +231,15 @@
         <a class="button secondary" href="/api/admin/validation/recommendation-snapshots.csv">Export snapshots CSV</a>
         <a class="button secondary" href="/api/admin/validation/reports.csv">Export reports CSV</a>
       </div>
+      {% if validation_summary.autoresearch %}
+      <div class="metric-row">
+        <article><span>AutoResearch mode</span><strong>{{ validation_summary.autoresearch.mode }}</strong></article>
+        <article><span>Weight profile</span><strong>{{ validation_summary.autoresearch.weight_profile_name }}</strong></article>
+        <article><span>Resolved outcomes</span><strong>{{ validation_summary.autoresearch.observations.resolved_outcomes }}</strong></article>
+        <article><span>Snapshots</span><strong>{{ validation_summary.autoresearch.observations.snapshot_count }}</strong></article>
+      </div>
+      <p class="muted">{{ validation_summary.autoresearch.recommendations[0] if validation_summary.autoresearch.recommendations else "AutoResearch ready." }}</p>
+      {% endif %}
     </section>
     <section class="panel">
       <p class="eyebrow">Forecast quality</p>

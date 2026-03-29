@@ -1,0 +1,65 @@
+{
+  "artifact_path": "/Users/clawdbot/Projects/market-reaction-forecaster/.tmp/uploads/cassandra/autoresearch-latest.json",
+  "baseline_weights": {
+    "analog_density_weight": 0.01,
+    "chaos_penalty_weight": 0.22,
+    "event_type::analyst_rating": 0.1,
+    "event_type::customer_loss": -0.18,
+    "event_type::customer_win": 0.16,
+    "event_type::earnings": 0.24,
+    "event_type::guidance": 0.22,
+    "event_type::macro": -0.08,
+    "event_type::mna": 0.15,
+    "event_type::product_launch": 0.18,
+    "event_type::regulatory": -0.14,
+    "event_type::supply_chain": -0.12,
+    "mirofish_weight": 0.16
+  },
+  "exemplar_cases": [],
+  "generated_at": "2026-03-29T16:10:32.703404+00:00",
+  "mode": "bootstrap",
+  "observations": {
+    "resolved_outcomes": 0,
+    "snapshot_count": 30
+  },
+  "recommendations": [
+    "Bootstrap hold: keep MiroFish weight near baseline until more resolved outcomes accumulate.",
+    "Bootstrap hold: chaos penalty stays near baseline because current snapshot instability is moderate."
+  ],
+  "scorecard": {
+    "avg_abs_mirofish_sentiment": 0.1173,
+    "avg_snapshot_chaos": 0.3384,
+    "avg_snapshot_consensus": 0.9317
+  },
+  "updated_weights": {
+    "analog_density_weight": 0.01,
+    "chaos_penalty_weight": 0.22,
+    "event_type::analyst_rating": 0.1,
+    "event_type::customer_loss": -0.18,
+    "event_type::customer_win": 0.16,
+    "event_type::earnings": 0.24,
+    "event_type::guidance": 0.22,
+    "event_type::macro": -0.08,
+    "event_type::mna": 0.15,
+    "event_type::product_launch": 0.18,
+    "event_type::regulatory": -0.14,
+    "event_type::supply_chain": -0.12,
+    "mirofish_weight": 0.16
+  },
+  "weight_deltas": {
+    "analog_density_weight": 0.0,
+    "chaos_penalty_weight": 0.0,
+    "event_type::analyst_rating": 0.0,
+    "event_type::customer_loss": 0.0,
+    "event_type::customer_win": 0.0,
+    "event_type::earnings": 0.0,
+    "event_type::guidance": 0.0,
+    "event_type::macro": 0.0,
+    "event_type::mna": 0.0,
+    "event_type::product_launch": 0.0,
+    "event_type::regulatory": 0.0,
+    "event_type::supply_chain": 0.0,
+    "mirofish_weight": 0.0
+  },
+  "weight_profile_name": "cassandra-autoresearch-v1"
+}

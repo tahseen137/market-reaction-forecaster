@@ -235,6 +235,7 @@ class RecommendationSnapshot(Base):
     invalidation_conditions: Mapped[str] = mapped_column(Text, nullable=False)
     factor_scores: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
     horizon_ranges: Mapped[list[dict[str, object]]] = mapped_column(JSON, default=list, nullable=False)
+    analysis_artifacts: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
 
     security: Mapped[Security] = relationship(back_populates="recommendation_snapshots")
     latest_event: Mapped[Event | None] = relationship(back_populates="recommendation_snapshots")
