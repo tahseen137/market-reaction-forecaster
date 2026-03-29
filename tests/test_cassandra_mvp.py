@@ -3,9 +3,9 @@ from __future__ import annotations
 from sqlalchemy import select
 
 from app.autoresearch import BASELINE_WEIGHT_OVERRIDES, run_autoresearch_loop
-from app.models import RecommendationOutcome, RecommendationSnapshot
+from app.models import RecommendationOutcome, RecommendationSnapshot, Security
 from app.scoring import build_base_recommendation
-from app.services import refresh_validation_report
+from app.services import refresh_validation_report, seed_demo_content
 from tests.conftest import acknowledge, signup
 
 
@@ -48,6 +48,34 @@ def test_autoresearch_runs_with_resolved_outcomes(session, settings):
     assert artifact["mode"] == "resolved_outcomes"
     assert artifact["observations"]["resolved_outcomes"] >= 1
     assert artifact["updated_weights"]["mirofish_weight"] != BASELINE_WEIGHT_OVERRIDES["mirofish_weight"]
+
+
+def test_seed_demo_content_backfills_legacy_snapshots(session, settings):
+    legacy_snapshot = session.scalars(
+        select(RecommendationSnapshot)
+        .join(RecommendationSnapshot.security)
+        .where(Security.symbol == "NVDA")
+        .order_by(RecommendationSnapshot.generated_at.desc())
+    ).first()
+    assert legacy_snapshot is not None
+
+    legacy_snapshot.analysis_artifacts = {}
+    session.add(legacy_snapshot)
+    session.commit()
+    legacy_id = legacy_snapshot.id
+
+    seed_demo_content(session, settings)
+
+    refreshed_snapshot = session.scalars(
+        select(RecommendationSnapshot)
+        .join(RecommendationSnapshot.security)
+        .where(Security.symbol == "NVDA")
+        .order_by(RecommendationSnapshot.generated_at.desc())
+    ).first()
+    assert refreshed_snapshot is not None
+    assert refreshed_snapshot.id != legacy_id
+    assert refreshed_snapshot.analysis_artifacts["mirofish"]["regime"] in {"bullish", "bearish", "cross-current"}
+    assert refreshed_snapshot.analysis_artifacts["chaos"]["predictability_horizon_days"] >= 1
 
 
 def test_recommendation_api_exposes_cassandra_artifacts_and_autoresearch(client):

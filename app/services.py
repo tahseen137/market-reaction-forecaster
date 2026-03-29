@@ -1207,6 +1207,11 @@ def refresh_market_state(session: Session, settings: Settings) -> None:
 def seed_demo_content(session: Session, settings: Settings) -> None:
     refresh_runtime_connector_states(session, settings)
     if session.scalars(select(Event).limit(1)).first():
+        for security in list_reference_universe(session):
+            latest_snapshot = _latest_snapshot_for_symbol(session, security.symbol)
+            analysis_artifacts = latest_snapshot.analysis_artifacts if latest_snapshot is not None else None
+            if latest_snapshot is None or not isinstance(analysis_artifacts, dict) or not analysis_artifacts.get("mirofish") or not analysis_artifacts.get("chaos"):
+                rebuild_security_recommendation(session, settings, security)
         return
     now = _now()
     seeded_candidates = [
