@@ -523,7 +523,31 @@ def rebuild_security_recommendation(
     security: Security,
     *,
     benchmark_reference_price: float | None = None,
+    force: bool = False,
 ) -> RecommendationSnapshot:
+    # Check if we already have a snapshot generated today (since market open)
+    # Market opens at 9:30 AM ET, so we use 9:00 AM ET as the cutoff
+    # Skip this check if force=True (for backfilling missing artifacts, etc)
+    if not force:
+        today_cutoff = _now().replace(hour=13, minute=0, second=0, microsecond=0)  # 9:00 AM ET = 13:00 UTC
+        if today_cutoff > _now():
+            # If it's before 9 AM ET today, use yesterday's 9 AM ET as cutoff
+            today_cutoff = today_cutoff - timedelta(days=1)
+        
+        existing_snapshot = session.scalars(
+            select(RecommendationSnapshot)
+            .where(
+                RecommendationSnapshot.security_id == security.id,
+                RecommendationSnapshot.generated_at >= today_cutoff,
+            )
+            .order_by(RecommendationSnapshot.generated_at.desc())
+            .limit(1)
+        ).first()
+        
+        if existing_snapshot is not None:
+            # Return existing snapshot if one was generated today
+            return existing_snapshot
+    
     latest_event = _latest_event_for_security(session, security.id)
     if latest_event is None:
         latest_event = create_event(
@@ -1213,7 +1237,7 @@ def seed_demo_content(session: Session, settings: Settings) -> None:
             latest_snapshot = _latest_snapshot_for_symbol(session, security.symbol)
             analysis_artifacts = latest_snapshot.analysis_artifacts if latest_snapshot is not None else None
             if latest_snapshot is None or not isinstance(analysis_artifacts, dict) or not analysis_artifacts.get("mirofish") or not analysis_artifacts.get("chaos"):
-                rebuild_security_recommendation(session, settings, security)
+                rebuild_security_recommendation(session, settings, security, force=True)
         return
     now = _now()
     seeded_candidates = [
