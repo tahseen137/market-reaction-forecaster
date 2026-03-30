@@ -704,6 +704,8 @@ def _recommendation_to_feed_entry(snapshot: RecommendationSnapshot, user_recomme
         "source_status": snapshot.source_status,
         "analog_sample_size": snapshot.analog_sample_size,
         "generated_at": snapshot.generated_at,
+        "price_snapshot_at": snapshot.security.last_price_at,
+        "news_snapshot_at": latest_event.created_at if latest_event else None,
         "latest_event_id": snapshot.latest_event_id,
         "factor_scores": snapshot.factor_scores,
         "horizon_ranges": snapshot.horizon_ranges,

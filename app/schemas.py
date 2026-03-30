@@ -250,6 +250,8 @@ class RecommendationDetailRead(BaseModel):
     source_status: str
     analog_sample_size: int
     generated_at: datetime
+    price_snapshot_at: datetime | None = None
+    news_snapshot_at: datetime | None = None
     latest_event_id: str | None
     factor_scores: dict[str, float]
     horizon_ranges: list[HorizonRangeRead]
