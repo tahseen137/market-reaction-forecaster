@@ -259,6 +259,7 @@ class RecommendationDetailRead(BaseModel):
     chaos_analysis: ChaosAnalysisRead | None = None
     weight_profile_name: str | None = None
     rationale: str | None = None
+    from_daily_cache: bool = False
 
 
 class RecommendationFeedEntry(RecommendationDetailRead):

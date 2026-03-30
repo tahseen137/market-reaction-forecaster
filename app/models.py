@@ -408,3 +408,28 @@ class ActivityEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_timestamp)
 
     actor: Mapped[User | None] = relationship(back_populates="activity_events")
+
+
+class DailyPrediction(Base):
+    __tablename__ = "daily_predictions"
+    __table_args__ = (
+        UniqueConstraint("date", "symbol", name="uq_daily_predictions_date_symbol"),
+        Index("ix_daily_predictions_date", "date"),
+        Index("ix_daily_predictions_symbol", "symbol"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    date: Mapped[str] = mapped_column(String(10), nullable=False)  # YYYY-MM-DD format
+    symbol: Mapped[str] = mapped_column(String(12), nullable=False)
+    action: Mapped[str] = mapped_column(String(12), nullable=False)
+    conviction_score: Mapped[int] = mapped_column(Integer, nullable=False)
+    confidence_score: Mapped[float] = mapped_column(Float, nullable=False)
+    thesis_summary: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_summary: Mapped[str] = mapped_column(Text, nullable=False)
+    invalidation_conditions: Mapped[str] = mapped_column(Text, nullable=False)
+    horizon_ranges: Mapped[list[dict[str, object]]] = mapped_column(JSON, default=list, nullable=False)
+    factor_scores: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    price_snapshot_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    news_snapshot_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    recommendation_snapshot_id: Mapped[str] = mapped_column(String(36), nullable=False)

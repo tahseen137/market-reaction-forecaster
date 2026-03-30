@@ -15,6 +15,7 @@ from app.data_sources import FinnhubClient, NormalizedEventCandidate, RssFeedCli
 from app.models import (
     BacktestRun,
     ConnectorState,
+    DailyPrediction,
     Event,
     PortfolioPosition,
     RecommendationOutcome,
@@ -262,6 +263,107 @@ def _latest_snapshots(session: Session) -> list[RecommendationSnapshot]:
     for snapshot in snapshots:
         latest_by_security.setdefault(snapshot.security_id, snapshot)
     return list(latest_by_security.values())
+
+
+def _get_today_date() -> str:
+    """Return today's date in YYYY-MM-DD format (UTC)."""
+    return _now().strftime("%Y-%m-%d")
+
+
+def _get_daily_predictions(session: Session, date: str) -> dict[str, DailyPrediction]:
+    """Fetch all daily predictions for a given date, indexed by symbol."""
+    predictions = session.scalars(
+        select(DailyPrediction).where(DailyPrediction.date == date)
+    ).all()
+    return {pred.symbol: pred for pred in predictions}
+
+
+def _store_daily_prediction(session: Session, snapshot: RecommendationSnapshot, date: str) -> DailyPrediction:
+    """Store a recommendation snapshot as a daily prediction."""
+    latest_event = snapshot.latest_event
+    
+    # Check if prediction already exists for this date/symbol
+    existing = session.scalars(
+        select(DailyPrediction).where(
+            DailyPrediction.date == date,
+            DailyPrediction.symbol == snapshot.security.symbol
+        )
+    ).first()
+    
+    if existing:
+        return existing
+    
+    prediction = DailyPrediction(
+        date=date,
+        symbol=snapshot.security.symbol,
+        action=snapshot.action,
+        conviction_score=snapshot.conviction_score,
+        confidence_score=snapshot.confidence_score,
+        thesis_summary=snapshot.thesis_summary,
+        evidence_summary=snapshot.evidence_summary,
+        invalidation_conditions=snapshot.invalidation_conditions,
+        horizon_ranges=snapshot.horizon_ranges,
+        factor_scores=snapshot.factor_scores,
+        generated_at=snapshot.generated_at,
+        price_snapshot_at=snapshot.security.last_price_at,
+        news_snapshot_at=latest_event.created_at if latest_event else None,
+        recommendation_snapshot_id=snapshot.id,
+    )
+    session.add(prediction)
+    session.commit()
+    session.refresh(prediction)
+    return prediction
+
+
+def _daily_prediction_to_feed_entry(
+    prediction: DailyPrediction,
+    session: Session,
+    user_recommendation: UserRecommendation | None,
+    *,
+    delayed_sample: bool
+) -> dict[str, object]:
+    """Convert a DailyPrediction to feed entry format."""
+    # Fetch the security info
+    security = session.scalars(
+        select(Security).where(Security.symbol == prediction.symbol)
+    ).first()
+    
+    if not security:
+        # Fallback: shouldn't happen, but handle gracefully
+        return {}
+    
+    analysis_artifacts = {}
+    
+    return {
+        "symbol": prediction.symbol,
+        "company_name": security.company_name,
+        "action": (user_recommendation.action if user_recommendation else prediction.action),
+        "conviction_score": user_recommendation.conviction_score if user_recommendation else prediction.conviction_score,
+        "confidence_score": prediction.confidence_score,
+        "profile_fit_score": user_recommendation.profile_fit_score if user_recommendation else None,
+        "allocation_min_pct": user_recommendation.allocation_min_pct if user_recommendation else None,
+        "allocation_max_pct": user_recommendation.allocation_max_pct if user_recommendation else None,
+        "urgency_label": user_recommendation.urgency_label if user_recommendation else None,
+        "thesis_summary": prediction.thesis_summary,
+        "evidence_summary": prediction.evidence_summary,
+        "invalidation_conditions": prediction.invalidation_conditions,
+        "benchmark_symbol": BENCHMARK_SYMBOL,
+        "source_status": "delayed",
+        "analog_sample_size": 0,
+        "generated_at": prediction.generated_at,
+        "price_snapshot_at": prediction.price_snapshot_at,
+        "news_snapshot_at": prediction.news_snapshot_at,
+        "latest_event_id": None,
+        "factor_scores": prediction.factor_scores,
+        "horizon_ranges": prediction.horizon_ranges,
+        "mirofish_analysis": None,
+        "chaos_analysis": None,
+        "weight_profile_name": None,
+        "rationale": user_recommendation.rationale if user_recommendation else None,
+        "latest_headline": None,
+        "delayed_sample": delayed_sample,
+        "from_daily_cache": True,
+    }
 
 
 def _validation_outcome_query() -> Select[tuple[RecommendationOutcome]]:
@@ -743,42 +845,85 @@ def _recommendation_to_feed_entry(snapshot: RecommendationSnapshot, user_recomme
 
 
 def get_recommendation_feed(session: Session, *, user: User | None = None, sample_limit: int = 6) -> list[dict[str, object]]:
+    today = _get_today_date()
+    daily_predictions = _get_daily_predictions(session, today)
+    
+    # If we have daily predictions for today, use them
+    if daily_predictions:
+        if user is None or not has_paid_access(user) or user.disclosures_acknowledged_at is None:
+            # For non-paying users, return cached predictions
+            predictions_list = list(daily_predictions.values())
+            predictions_list.sort(key=lambda p: p.conviction_score, reverse=True)
+            return [
+                _daily_prediction_to_feed_entry(pred, session, None, delayed_sample=True)
+                for pred in predictions_list[:sample_limit]
+            ]
+        
+        # For paying users, get their personalized recommendations
+        user_recs = {
+            recommendation.recommendation_snapshot_id: recommendation
+            for recommendation in session.scalars(
+                select(UserRecommendation)
+                .where(UserRecommendation.user_id == user.id)
+                .options(selectinload(UserRecommendation.recommendation_snapshot))
+            )
+        }
+        
+        # Match predictions to user recommendations by snapshot ID
+        feed = []
+        for pred in daily_predictions.values():
+            user_rec = user_recs.get(pred.recommendation_snapshot_id)
+            feed.append(_daily_prediction_to_feed_entry(pred, session, user_rec, delayed_sample=False))
+        
+        feed.sort(key=lambda item: (item["conviction_score"], item["confidence_score"]), reverse=True)
+        return feed
+    
+    # No daily predictions yet — generate fresh and cache them
     snapshots = _latest_snapshots(session)
     if not snapshots:
         return []
-    if user is None or not has_paid_access(user) or user.disclosures_acknowledged_at is None:
-        delayed_cutoff = _now() - timedelta(hours=24)
-        delayed = [snapshot for snapshot in snapshots if (_coerce_utc(snapshot.generated_at) or _now()) <= delayed_cutoff]
-        if not delayed:
-            delayed = snapshots[:sample_limit]
-        delayed.sort(key=lambda snapshot: snapshot.conviction_score, reverse=True)
-        return [_recommendation_to_feed_entry(snapshot, None, delayed_sample=True) for snapshot in delayed[:sample_limit]]
-
-    user_recs = {
-        recommendation.recommendation_snapshot_id: recommendation
-        for recommendation in session.scalars(
-            select(UserRecommendation)
-            .where(UserRecommendation.user_id == user.id)
-            .options(selectinload(UserRecommendation.recommendation_snapshot))
-        )
-    }
-    feed = [_recommendation_to_feed_entry(snapshot, user_recs.get(snapshot.id), delayed_sample=False) for snapshot in snapshots]
-    feed.sort(key=lambda item: (item["conviction_score"], item["confidence_score"]), reverse=True)
-    return feed
+    
+    # Store snapshots as today's daily predictions
+    for snapshot in snapshots:
+        _store_daily_prediction(session, snapshot, today)
+    
+    # Now fetch and return them using the cached path
+    return get_recommendation_feed(session, user=user, sample_limit=sample_limit)
 
 
 def get_recommendation_detail(session: Session, symbol: str, *, user: User | None = None) -> dict[str, object] | None:
+    today = _get_today_date()
+    
+    # Try to get from daily cache first
+    daily_prediction = session.scalars(
+        select(DailyPrediction).where(
+            DailyPrediction.date == today,
+            DailyPrediction.symbol == symbol
+        )
+    ).first()
+    
+    if daily_prediction:
+        user_rec = None
+        if user is not None:
+            statement = select(UserRecommendation).where(
+                UserRecommendation.user_id == user.id,
+                UserRecommendation.recommendation_snapshot_id == daily_prediction.recommendation_snapshot_id,
+            )
+            user_rec = session.scalars(statement).first()
+        
+        delayed_sample = user is None or not has_paid_access(user)
+        return _daily_prediction_to_feed_entry(daily_prediction, session, user_rec, delayed_sample=delayed_sample)
+    
+    # Not in cache yet, generate and store
     snapshot = _latest_snapshot_for_symbol(session, symbol)
     if snapshot is None:
         return None
-    user_rec = None
-    if user is not None:
-        statement = select(UserRecommendation).where(
-            UserRecommendation.user_id == user.id,
-            UserRecommendation.recommendation_snapshot_id == snapshot.id,
-        )
-        user_rec = session.scalars(statement).first()
-    return _recommendation_to_feed_entry(snapshot, user_rec, delayed_sample=(user is None or not has_paid_access(user)))
+    
+    # Store in cache
+    _store_daily_prediction(session, snapshot, today)
+    
+    # Return cached version
+    return get_recommendation_detail(session, symbol, user=user)
 
 
 def create_watchlist(session: Session, user: User, *, name: str, symbols: Iterable[str]) -> Watchlist:
