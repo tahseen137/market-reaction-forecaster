@@ -54,6 +54,12 @@
         <span class="pill {{ item.action }}">{{ item.action|upper }}</span>
         <h3><a href="/recommendations/{{ item.symbol }}">{{ item.symbol }}</a></h3>
         <p class="muted">{{ item.thesis_summary }}</p>
+        <p class="muted" style="font-size: 0.85rem; margin-top: 0.25rem;">
+          {% if item.horizon_ranges and item.horizon_ranges|length > 0 %}
+            Horizons: {% for h in item.horizon_ranges %}{{ h.horizon_days }}d{% if not loop.last %}, {% endif %}{% endfor %}
+          {% endif %}
+          {% if item.generated_at %} | As of {{ item.generated_at.strftime("%m/%d %H:%M UTC") }}{% endif %}
+        </p>
         <dl class="mini-metrics">
           <div><dt>Conviction</dt><dd>{{ item.conviction_score }}/5</dd></div>
           <div><dt>Confidence</dt><dd>{{ "%.0f%%"|format(item.confidence_score * 100) }}</dd></div>
@@ -103,12 +109,18 @@
     <section class="panel prose-panel">
       <p class="eyebrow">{{ recommendation.symbol }}</p>
       <h1>{{ recommendation.action|upper }} with {{ recommendation.conviction_score }}/5 conviction</h1>
+      <p class="muted">
+        <strong>Predictions as of:</strong> {{ recommendation.generated_at.strftime("%Y-%m-%d %H:%M UTC") }}
+        {% if recommendation.price_snapshot_at %} | <strong>Price data:</strong> {{ recommendation.price_snapshot_at.strftime("%Y-%m-%d %H:%M UTC") }}{% endif %}
+        {% if recommendation.news_snapshot_at %} | <strong>News data:</strong> {{ recommendation.news_snapshot_at.strftime("%Y-%m-%d %H:%M UTC") }}{% endif %}
+      </p>
       <p>{{ recommendation.thesis_summary }}</p>
       <p><strong>Evidence:</strong> {{ recommendation.evidence_summary }}</p>
       <p><strong>Invalidation:</strong> {{ recommendation.invalidation_conditions }}</p>
+      <h3>Forecast horizons</h3>
       <div class="metric-row">
         {% for item in recommendation.horizon_ranges %}
-        <article><span>{{ item.horizon_days }} day</span><strong>{{ "%.2f"|format(item.expected_return_mid) }}%</strong></article>
+        <article><span>{{ item.horizon_days }}-day horizon</span><strong>{{ "%.2f"|format(item.expected_return_mid) }}%</strong></article>
         {% endfor %}
       </div>
       {% if recommendation.mirofish_analysis %}
