@@ -58,7 +58,9 @@
           {% if item.horizon_ranges and item.horizon_ranges|length > 0 %}
             Horizons: {% for h in item.horizon_ranges %}{{ h.horizon_days }}d{% if not loop.last %}, {% endif %}{% endfor %}
           {% endif %}
-          {% if item.generated_at %} | As of {{ item.generated_at.strftime("%m/%d %H:%M UTC") }}{% endif %}
+          {% if item.generated_at %} | Predictions as of {{ item.generated_at.strftime("%m/%d %H:%M UTC") }}{% endif %}
+          {% if item.price_snapshot_at %} | Price data: {{ item.price_snapshot_at.strftime("%m/%d %H:%M UTC") }}{% endif %}
+          {% if item.news_snapshot_at %} | News data: {{ item.news_snapshot_at.strftime("%m/%d %H:%M UTC") }}{% endif %}
         </p>
         <dl class="mini-metrics">
           <div><dt>Conviction</dt><dd>{{ item.conviction_score }}/5</dd></div>
