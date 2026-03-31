@@ -67,6 +67,11 @@
         <span class="pill {{ item.action }}">{{ item.action|upper }}</span>
         <h3><a href="/recommendations/{{ item.symbol }}">{{ item.symbol }}</a></h3>
         <p class="muted">{{ item.latest_headline or item.thesis_summary }}</p>
+        <p class="muted" style="font-size: 0.85rem; margin-top: 0.25rem;">
+          <strong>Predictions as of:</strong> {{ item.generated_at.strftime("%Y-%m-%d %H:%M UTC") }}
+          {% if item.price_snapshot_at %} | <strong>Price data:</strong> {{ item.price_snapshot_at.strftime("%Y-%m-%d %H:%M UTC") }}{% endif %}
+          {% if item.news_snapshot_at %} | <strong>News data:</strong> {{ item.news_snapshot_at.strftime("%Y-%m-%d %H:%M UTC") }}{% endif %}
+        </p>
         <dl class="mini-metrics">
           <div><dt>Conviction</dt><dd>{{ item.conviction_score }}/5</dd></div>
           <div><dt>Confidence</dt><dd>{{ "%.0f%%"|format(item.confidence_score * 100) }}</dd></div>
