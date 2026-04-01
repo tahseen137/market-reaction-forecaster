@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import json
+import logging
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Generator
 from uuid import uuid4
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 
 import sentry_sdk
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
@@ -71,6 +78,7 @@ from app.schemas import (
     WatchlistRead,
 )
 from app.services import (
+    archive_validation_run,
     build_dashboard,
     build_recommendation_snapshot_export,
     build_model_portfolio,
@@ -87,7 +95,9 @@ from app.services import (
     list_events,
     list_reference_universe,
     list_validation_reports,
+    list_validation_run_artifacts,
     list_watchlists,
+    load_validation_run_artifact,
     rebuild_all_user_recommendations,
     rebuild_model_portfolio_for_user,
     rebuild_security_recommendation,
@@ -1063,6 +1073,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> dict[str, object]:
         refresh_validation_report(session, settings)
         return build_validation_summary(session, settings)
+
+    @app.get("/api/admin/cassandra/validation/runs")
+    def admin_cassandra_validation_runs_api(
+        settings: Settings = Depends(get_runtime_settings),
+        current_user: User = Depends(require_admin_api),
+    ) -> list[dict[str, object]]:
+        return list_validation_run_artifacts(settings, limit=14)
+
+    @app.get("/api/admin/cassandra/validation/runs/{run_id}")
+    def admin_cassandra_validation_run_detail_api(
+        run_id: str,
+        settings: Settings = Depends(get_runtime_settings),
+        current_user: User = Depends(require_admin_api),
+    ) -> dict[str, object]:
+        artifact = load_validation_run_artifact(settings, run_id=run_id)
+        if artifact is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Validation run not found")
+        return artifact
+
+    @app.post("/api/admin/cassandra/validation/run")
+    def admin_cassandra_validation_run_api(
+        request: Request,
+        session: Session = Depends(get_session),
+        settings: Settings = Depends(get_runtime_settings),
+        current_user: User = Depends(require_admin_api),
+    ) -> dict[str, object]:
+        _require_csrf(request)
+        return archive_validation_run(session, settings, reason="admin-api")
 
     @app.get("/api/admin/cassandra/autoresearch")
     def admin_cassandra_autoresearch_api(

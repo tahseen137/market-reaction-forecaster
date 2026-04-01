@@ -133,6 +133,9 @@ We should consider the thesis validated only if both product and forecast signal
 - Summary API: `/api/admin/validation/summary`
 - Snapshot export: `/api/admin/validation/recommendation-snapshots.csv`
 - Daily report export: `/api/admin/validation/reports.csv`
+- Live validation runner CLI: `python -m app.validation_cli --reason manual-check --top-calls 5`
+- Live validation archive list: `/api/admin/cassandra/validation/runs`
+- Live validation archive trigger: `POST /api/admin/cassandra/validation/run`
 
 ## Notes
 
