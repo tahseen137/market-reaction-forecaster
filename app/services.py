@@ -32,7 +32,7 @@ from app.models import (
 )
 from app.scoring import build_backtest_metrics, build_base_recommendation, personalize_recommendation
 from app.universe import BENCHMARK_SYMBOL, SAMPLE_PRICE_MAP, UNIVERSE_SECURITIES, UNIVERSE_VERSION
-from app.user_service import get_subscription_state, has_paid_access, sync_role_with_subscription
+from app.user_service import can_manage_users, get_subscription_state, has_paid_access, sync_role_with_subscription
 
 
 IR_FEED_URLS: dict[str, str] = {
@@ -848,7 +848,27 @@ def _recommendation_to_feed_entry(snapshot: RecommendationSnapshot, user_recomme
 def get_recommendation_feed(session: Session, *, user: User | None = None, sample_limit: int = 6) -> list[dict[str, object]]:
     today = _get_today_date()
     daily_predictions = _get_daily_predictions(session, today)
-    
+
+    # Admins need the freshest snapshot-backed view for validation/debugging.
+    if user is not None and can_manage_users(user):
+        snapshots = _latest_snapshots(session)
+        if not snapshots:
+            return []
+        user_recs = {
+            recommendation.recommendation_snapshot_id: recommendation
+            for recommendation in session.scalars(
+                select(UserRecommendation)
+                .where(UserRecommendation.user_id == user.id)
+                .options(selectinload(UserRecommendation.recommendation_snapshot))
+            )
+        }
+        feed = [
+            _recommendation_to_feed_entry(snapshot, user_recs.get(snapshot.id), delayed_sample=False)
+            for snapshot in snapshots
+        ]
+        feed.sort(key=lambda item: (item["conviction_score"], item["confidence_score"]), reverse=True)
+        return feed[:sample_limit]
+
     # If we have daily predictions for today, use them
     if daily_predictions:
         if user is None or not has_paid_access(user) or user.disclosures_acknowledged_at is None:
@@ -859,7 +879,7 @@ def get_recommendation_feed(session: Session, *, user: User | None = None, sampl
                 _daily_prediction_to_feed_entry(pred, session, None, delayed_sample=True)
                 for pred in predictions_list[:sample_limit]
             ]
-        
+
         # For paying users, get their personalized recommendations
         user_recs = {
             recommendation.recommendation_snapshot_id: recommendation
@@ -869,13 +889,19 @@ def get_recommendation_feed(session: Session, *, user: User | None = None, sampl
                 .options(selectinload(UserRecommendation.recommendation_snapshot))
             )
         }
-        
-        # Match predictions to user recommendations by snapshot ID
+
+        # Match predictions to user recommendations by snapshot ID.
+        # Paying users should still see the rich snapshot-backed analysis tied to the
+        # locked daily prediction, not the stripped public cache view.
         feed = []
         for pred in daily_predictions.values():
             user_rec = user_recs.get(pred.recommendation_snapshot_id)
-            feed.append(_daily_prediction_to_feed_entry(pred, session, user_rec, delayed_sample=False))
-        
+            snapshot = session.get(RecommendationSnapshot, pred.recommendation_snapshot_id)
+            if snapshot is not None:
+                feed.append(_recommendation_to_feed_entry(snapshot, user_rec, delayed_sample=False))
+            else:
+                feed.append(_daily_prediction_to_feed_entry(pred, session, user_rec, delayed_sample=False))
+
         feed.sort(key=lambda item: (item["conviction_score"], item["confidence_score"]), reverse=True)
         return feed
     
@@ -894,7 +920,18 @@ def get_recommendation_feed(session: Session, *, user: User | None = None, sampl
 
 def get_recommendation_detail(session: Session, symbol: str, *, user: User | None = None) -> dict[str, object] | None:
     today = _get_today_date()
-    
+
+    if user is not None and can_manage_users(user):
+        snapshot = _latest_snapshot_for_symbol(session, symbol)
+        if snapshot is None:
+            return None
+        statement = select(UserRecommendation).where(
+            UserRecommendation.user_id == user.id,
+            UserRecommendation.recommendation_snapshot_id == snapshot.id,
+        )
+        user_rec = session.scalars(statement).first()
+        return _recommendation_to_feed_entry(snapshot, user_rec, delayed_sample=False)
+
     # Try to get from daily cache first
     daily_prediction = session.scalars(
         select(DailyPrediction).where(
@@ -902,7 +939,7 @@ def get_recommendation_detail(session: Session, symbol: str, *, user: User | Non
             DailyPrediction.symbol == symbol
         )
     ).first()
-    
+
     if daily_prediction:
         user_rec = None
         if user is not None:
@@ -911,8 +948,12 @@ def get_recommendation_detail(session: Session, symbol: str, *, user: User | Non
                 UserRecommendation.recommendation_snapshot_id == daily_prediction.recommendation_snapshot_id,
             )
             user_rec = session.scalars(statement).first()
-        
+
         delayed_sample = user is None or not has_paid_access(user)
+        if user is not None and has_paid_access(user) and user.disclosures_acknowledged_at is not None:
+            snapshot = session.get(RecommendationSnapshot, daily_prediction.recommendation_snapshot_id)
+            if snapshot is not None:
+                return _recommendation_to_feed_entry(snapshot, user_rec, delayed_sample=False)
         return _daily_prediction_to_feed_entry(daily_prediction, session, user_rec, delayed_sample=delayed_sample)
     
     # Not in cache yet, generate and store
@@ -922,7 +963,15 @@ def get_recommendation_detail(session: Session, symbol: str, *, user: User | Non
     
     # Store in cache
     _store_daily_prediction(session, snapshot, today)
-    
+
+    if user is not None and has_paid_access(user) and user.disclosures_acknowledged_at is not None:
+        statement = select(UserRecommendation).where(
+            UserRecommendation.user_id == user.id,
+            UserRecommendation.recommendation_snapshot_id == snapshot.id,
+        )
+        user_rec = session.scalars(statement).first()
+        return _recommendation_to_feed_entry(snapshot, user_rec, delayed_sample=False)
+
     # Return cached version
     return get_recommendation_detail(session, symbol, user=user)
 

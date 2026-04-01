@@ -157,3 +157,24 @@ def test_recommendation_api_exposes_cassandra_artifacts_and_validation_runner(cl
     validation_json_path = client.app.state.settings.uploads_dir / "cassandra" / "validation-runs" / f"{validation_payload['run_id']}.json"
     assert artifact_path.exists()
     assert validation_json_path.exists()
+
+
+def test_admin_recommendation_detail_bypasses_daily_cache(client):
+    public_feed = client.get("/api/recommendations/feed")
+    assert public_feed.status_code == 200
+    assert public_feed.json()
+    assert all(item["delayed_sample"] is True for item in public_feed.json())
+
+    admin_login = client.post(
+        "/api/session/login",
+        json={"username": "admin", "password": "pilot-password", "next_path": "/dashboard"},
+    )
+    assert admin_login.status_code == 200
+
+    recommendation = client.get("/api/recommendations/NVDA")
+    assert recommendation.status_code == 200
+    payload = recommendation.json()
+    assert payload["from_daily_cache"] is False
+    assert payload["mirofish_analysis"]["regime"] in {"bullish", "bearish", "cross-current"}
+    assert payload["chaos_analysis"]["predictability_horizon_days"] >= 1
+    assert payload["weight_profile_name"]
