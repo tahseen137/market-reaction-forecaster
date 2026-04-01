@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from io import StringIO
 from typing import Any, Iterable
 import csv
+import json
 
 from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session, selectinload
@@ -971,6 +972,256 @@ def build_shadow_portfolio_summary(session: Session, settings: Settings) -> dict
     }
 
 
+def _validation_runs_dir(settings: Settings):
+    return settings.uploads_dir / "cassandra" / "validation-runs"
+
+
+def _validation_run_id(value: datetime | None = None) -> str:
+    return (value or _now()).strftime("%Y%m%dT%H%M%S%fZ")
+
+
+def _validation_tracking_note(*, resolved_outcomes: int, open_outcomes: int) -> str:
+    if resolved_outcomes == 0:
+        return "Bootstrap mode: live calls are now archived, but all scored horizons are still waiting on future market closes."
+    if open_outcomes > 0:
+        return f"Tracking mode: {open_outcomes} live outcome(s) are still open and will resolve across the 1/5/20 day windows."
+    return "Resolved mode: every tracked horizon in the current archive has a realized outcome attached."
+
+
+def _serialize_validation_outcome(outcome: RecommendationOutcome, *, now: datetime) -> dict[str, object]:
+    target_at = _coerce_utc(outcome.target_at) or now
+    if outcome.status == "resolved":
+        runtime_status = "resolved"
+        days_until_target = 0
+    elif target_at <= now:
+        runtime_status = "due"
+        days_until_target = 0
+    else:
+        runtime_status = "pending"
+        days_until_target = max(0, int(((target_at - now).total_seconds() + 86399) // 86400))
+
+    return {
+        "status": outcome.status,
+        "runtime_status": runtime_status,
+        "target_at": target_at,
+        "resolved_at": _coerce_utc(outcome.resolved_at),
+        "days_until_target": days_until_target,
+        "strategy_return_pct": outcome.strategy_return_pct,
+        "benchmark_return_pct": outcome.benchmark_return_pct,
+        "excess_return_pct": outcome.excess_return_pct,
+        "baseline_label": outcome.baseline_label,
+        "baseline_action": outcome.baseline_action,
+        "baseline_return_pct": outcome.baseline_return_pct,
+        "directional_correct": outcome.directional_correct,
+    }
+
+
+def _ranked_live_validation_snapshots(session: Session) -> list[RecommendationSnapshot]:
+    snapshots = _latest_snapshots(session)
+    return sorted(
+        snapshots,
+        key=lambda item: (
+            item.action != "hold",
+            item.conviction_score,
+            item.confidence_score,
+            _coerce_utc(item.generated_at) or _now(),
+        ),
+        reverse=True,
+    )
+
+
+def _build_top_live_validation_calls(session: Session, settings: Settings, *, limit: int) -> list[dict[str, object]]:
+    now = _now()
+    benchmark_price = _benchmark_quote_price(settings)
+    outcomes_by_snapshot: dict[str, list[RecommendationOutcome]] = {}
+    for outcome in session.scalars(_validation_outcome_query()):
+        outcomes_by_snapshot.setdefault(outcome.recommendation_snapshot_id, []).append(outcome)
+
+    calls: list[dict[str, object]] = []
+    for rank, snapshot in enumerate(_ranked_live_validation_snapshots(session)[:limit], start=1):
+        current_return_pct = _safe_return_pct(snapshot.security.last_price, snapshot.reference_price)
+        benchmark_return_pct = _safe_return_pct(benchmark_price, snapshot.benchmark_reference_price)
+        horizon_outcomes = sorted(outcomes_by_snapshot.get(snapshot.id, []), key=lambda item: item.horizon_days)
+        horizons = {str(outcome.horizon_days): _serialize_validation_outcome(outcome, now=now) for outcome in horizon_outcomes}
+        resolved = [outcome for outcome in horizon_outcomes if outcome.status == "resolved"]
+        pending = [outcome for outcome in horizon_outcomes if outcome.status != "resolved"]
+        latest_event = snapshot.latest_event
+        calls.append(
+            {
+                "rank": rank,
+                "snapshot_id": snapshot.id,
+                "symbol": snapshot.security.symbol,
+                "company_name": snapshot.security.company_name,
+                "action": snapshot.action,
+                "conviction_score": snapshot.conviction_score,
+                "confidence_score": snapshot.confidence_score,
+                "generated_at": snapshot.generated_at,
+                "source_status": snapshot.source_status,
+                "reference_price": snapshot.reference_price,
+                "current_price": snapshot.security.last_price,
+                "current_return_pct": current_return_pct,
+                "benchmark_symbol": snapshot.benchmark_symbol,
+                "benchmark_reference_price": snapshot.benchmark_reference_price,
+                "benchmark_current_price": benchmark_price,
+                "benchmark_return_pct": benchmark_return_pct,
+                "current_excess_return_pct": round(current_return_pct - benchmark_return_pct, 4),
+                "latest_event_type": latest_event.event_type if latest_event else None,
+                "latest_headline": latest_event.headline if latest_event else None,
+                "thesis_summary": snapshot.thesis_summary,
+                "invalidation_conditions": snapshot.invalidation_conditions,
+                "resolved_horizon_count": len(resolved),
+                "pending_horizon_count": len(pending),
+                "horizons": horizons,
+            }
+        )
+    return calls
+
+
+def _build_live_validation_calls_csv(calls: list[dict[str, object]]) -> str:
+    buffer = StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(
+        [
+            "rank",
+            "symbol",
+            "action",
+            "generated_at",
+            "conviction_score",
+            "confidence_score",
+            "reference_price",
+            "current_price",
+            "current_return_pct",
+            "benchmark_symbol",
+            "benchmark_return_pct",
+            "current_excess_return_pct",
+            "horizon_1_status",
+            "horizon_5_status",
+            "horizon_20_status",
+        ]
+    )
+    for call in calls:
+        horizons = call.get("horizons", {}) if isinstance(call.get("horizons"), dict) else {}
+        writer.writerow(
+            [
+                call.get("rank"),
+                call.get("symbol"),
+                call.get("action"),
+                _json_ready(call.get("generated_at")),
+                call.get("conviction_score"),
+                call.get("confidence_score"),
+                call.get("reference_price"),
+                call.get("current_price"),
+                call.get("current_return_pct"),
+                call.get("benchmark_symbol"),
+                call.get("benchmark_return_pct"),
+                call.get("current_excess_return_pct"),
+                horizons.get("1", {}).get("runtime_status") if isinstance(horizons.get("1"), dict) else None,
+                horizons.get("5", {}).get("runtime_status") if isinstance(horizons.get("5"), dict) else None,
+                horizons.get("20", {}).get("runtime_status") if isinstance(horizons.get("20"), dict) else None,
+            ]
+        )
+    return buffer.getvalue()
+
+
+def _validation_run_index_entry(payload: dict[str, object], *, json_path: str | None = None) -> dict[str, object]:
+    artifact_paths = payload.get("artifact_paths", {}) if isinstance(payload.get("artifact_paths"), dict) else {}
+    forecast_metrics = payload.get("forecast_metrics", {}) if isinstance(payload.get("forecast_metrics"), dict) else {}
+    shadow_portfolio = payload.get("shadow_portfolio", {}) if isinstance(payload.get("shadow_portfolio"), dict) else {}
+    top_live_calls = payload.get("top_live_calls", []) if isinstance(payload.get("top_live_calls"), list) else []
+    return {
+        "run_id": payload.get("run_id"),
+        "generated_at": payload.get("generated_at"),
+        "reason": payload.get("reason"),
+        "report_date": payload.get("report_date"),
+        "validation_report_id": payload.get("validation_report_id"),
+        "tracking_note": payload.get("tracking_note"),
+        "top_call_count": len(top_live_calls),
+        "resolved_outcomes": forecast_metrics.get("resolved_outcomes", 0),
+        "open_outcomes": forecast_metrics.get("open_outcomes", 0),
+        "shadow_open_positions": shadow_portfolio.get("open_positions", 0),
+        "shadow_average_excess_return_pct": shadow_portfolio.get("average_excess_return_pct", 0.0),
+        "json_path": json_path or artifact_paths.get("json"),
+        "csv_path": artifact_paths.get("csv"),
+    }
+
+
+def load_validation_run_artifact(settings: Settings, *, run_id: str | None = None) -> dict[str, object] | None:
+    artifacts_dir = _validation_runs_dir(settings)
+    artifact_path = artifacts_dir / ("latest.json" if run_id is None else f"{run_id}.json")
+    if not artifact_path.exists():
+        return None
+    return json.loads(artifact_path.read_text())
+
+
+def list_validation_run_artifacts(settings: Settings, *, limit: int = 14) -> list[dict[str, object]]:
+    artifacts_dir = _validation_runs_dir(settings)
+    if not artifacts_dir.exists():
+        return []
+
+    runs: list[dict[str, object]] = []
+    for artifact_path in sorted(artifacts_dir.glob("*.json"), reverse=True):
+        if artifact_path.name == "latest.json":
+            continue
+        try:
+            payload = json.loads(artifact_path.read_text())
+        except json.JSONDecodeError:
+            continue
+        runs.append(_validation_run_index_entry(payload, json_path=str(artifact_path)))
+        if len(runs) >= limit:
+            break
+    return runs
+
+
+def archive_validation_run(
+    session: Session,
+    settings: Settings,
+    *,
+    reason: str = "manual",
+    top_calls: int = 5,
+) -> dict[str, object]:
+    validation_report = refresh_validation_report(session, settings)
+    summary = build_validation_summary(session, settings)
+    generated_at = _now()
+    run_id = _validation_run_id(generated_at)
+    top_live_calls = _build_top_live_validation_calls(session, settings, limit=top_calls)
+    tracking_note = _validation_tracking_note(
+        resolved_outcomes=int(summary["forecast_metrics"]["resolved_outcomes"]),
+        open_outcomes=int(summary["forecast_metrics"]["open_outcomes"]),
+    )
+
+    artifacts_dir = _validation_runs_dir(settings)
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    json_path = artifacts_dir / f"{run_id}.json"
+    csv_path = artifacts_dir / f"{run_id}-calls.csv"
+    latest_path = artifacts_dir / "latest.json"
+
+    artifact = {
+        "run_id": run_id,
+        "generated_at": generated_at,
+        "reason": reason,
+        "report_date": summary["report_date"],
+        "validation_report_id": validation_report.id,
+        "tracking_note": tracking_note,
+        "artifact_paths": {
+            "json": str(json_path),
+            "csv": str(csv_path),
+            "latest": str(latest_path),
+        },
+        "forecast_metrics": summary["forecast_metrics"],
+        "shadow_portfolio": summary["shadow_portfolio"],
+        "funnel": summary["funnel"],
+        "connector_status": summary["connector_status"],
+        "autoresearch": summary["autoresearch"],
+        "top_live_calls": top_live_calls,
+    }
+
+    json_payload = json.dumps(_json_ready(artifact), indent=2, sort_keys=True) + "\n"
+    json_path.write_text(json_payload)
+    latest_path.write_text(json_payload)
+    csv_path.write_text(_build_live_validation_calls_csv(top_live_calls))
+    return json.loads(json_payload)
+
+
 def build_validation_summary(session: Session, settings: Settings, *, lookback_days: int = 14) -> dict[str, Any]:
     analytics = summarize_analytics_events(session, lookback_days=lookback_days)
     outcomes = list(session.scalars(_validation_outcome_query()))
@@ -1024,6 +1275,7 @@ def build_validation_summary(session: Session, settings: Settings, *, lookback_d
     autoresearch_artifact = load_autoresearch_artifact(settings)
 
     latest_report = get_latest_validation_report(session)
+    latest_live_validation = load_validation_run_artifact(settings)
     return {
         "generated_at": _now(),
         "report_date": _report_date(),
@@ -1035,6 +1287,10 @@ def build_validation_summary(session: Session, settings: Settings, *, lookback_d
         "autoresearch": autoresearch_artifact,
         "latest_report_id": latest_report.id if latest_report else None,
         "connector_status": build_system_status(session, settings),
+        "live_validation_runs": {
+            "latest": _validation_run_index_entry(latest_live_validation) if latest_live_validation else None,
+            "recent": list_validation_run_artifacts(settings, limit=7),
+        },
     }
 
 

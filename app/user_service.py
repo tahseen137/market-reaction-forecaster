@@ -134,11 +134,36 @@ def create_user(
 
 
 def ensure_bootstrap_admin(session: Session, settings: Settings) -> User | None:
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    logger.info(f"[BOOTSTRAP] Checking admin bootstrap...")
+    logger.info(f"[BOOTSTRAP] bootstrap_admin_configured: {settings.bootstrap_admin_configured}")
+    logger.info(f"[BOOTSTRAP] bootstrap_admin_username: {settings.bootstrap_admin_username!r}")
+    logger.info(f"[BOOTSTRAP] bootstrap_admin_password: {'<set>' if settings.bootstrap_admin_password else '<not set>'}")
+    logger.info(f"[BOOTSTRAP] bootstrap_admin_email: {settings.bootstrap_admin_email!r}")
+    
     if not settings.bootstrap_admin_configured:
+        logger.warning("[BOOTSTRAP] Admin not configured - skipping")
         return None
+    
     existing_user = get_user_by_username(session, settings.bootstrap_admin_username or "")
     if existing_user:
+        logger.info(f"[BOOTSTRAP] Admin user already exists: {existing_user.username}")
+        logger.info(f"[BOOTSTRAP] Verifying password hash...")
+        from app.security import verify_password
+        password_valid = verify_password(settings.bootstrap_admin_password or "", existing_user.password_hash)
+        logger.info(f"[BOOTSTRAP] Password verification: {password_valid}")
+        if not password_valid:
+            logger.warning(f"[BOOTSTRAP] Password mismatch - updating admin password")
+            existing_user.password_hash = hash_password(settings.bootstrap_admin_password or "")
+            session.add(existing_user)
+            session.commit()
+            session.refresh(existing_user)
+            logger.info(f"[BOOTSTRAP] Admin password updated successfully")
         return existing_user
+    
+    logger.info(f"[BOOTSTRAP] Creating new admin user: {settings.bootstrap_admin_username}")
     user = create_user(
         session,
         username=settings.bootstrap_admin_username or "admin",
@@ -157,6 +182,7 @@ def ensure_bootstrap_admin(session: Session, settings: Settings) -> User | None:
     session.add_all([user, subscription])
     session.commit()
     session.refresh(user)
+    logger.info(f"[BOOTSTRAP] Admin user created successfully: {user.username}")
     return user
 
 
@@ -279,20 +305,39 @@ class AuthResult:
 
 
 def authenticate_user(session: Session, username: str, password: str, settings: Settings) -> AuthResult:
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    logger.info(f"[AUTH] Login attempt for username: {username!r}")
     user = get_user_by_username(session, username)
-    if user is None or not user.is_active:
+    
+    if user is None:
+        logger.warning(f"[AUTH] User not found: {username!r}")
+        return AuthResult(user=None, error="Invalid credentials")
+    
+    logger.info(f"[AUTH] User found: {user.username}, active: {user.is_active}, role: {user.role}")
+    
+    if not user.is_active:
+        logger.warning(f"[AUTH] User inactive: {user.username}")
         return AuthResult(user=None, error="Invalid credentials")
 
     now = _now()
     locked_until = _coerce_utc(user.locked_until)
     if locked_until and locked_until > now:
+        logger.warning(f"[AUTH] User locked until: {locked_until}")
         return AuthResult(user=None, error="Account temporarily locked. Try again later.")
 
-    if not verify_password(password, user.password_hash):
+    logger.info(f"[AUTH] Verifying password for user: {user.username}")
+    password_valid = verify_password(password, user.password_hash)
+    logger.info(f"[AUTH] Password verification result: {password_valid}")
+    
+    if not password_valid:
         user.failed_login_attempts += 1
+        logger.warning(f"[AUTH] Failed login attempt {user.failed_login_attempts} for user: {user.username}")
         if user.failed_login_attempts >= settings.max_login_attempts:
             user.locked_until = now + timedelta(minutes=settings.login_lockout_minutes)
             user.failed_login_attempts = 0
+            logger.warning(f"[AUTH] User locked after {settings.max_login_attempts} attempts: {user.username}")
         session.add(user)
         session.commit()
         locked_until = _coerce_utc(user.locked_until)
@@ -300,6 +345,7 @@ def authenticate_user(session: Session, username: str, password: str, settings: 
             return AuthResult(user=None, error="Account temporarily locked. Try again later.")
         return AuthResult(user=None, error="Invalid credentials")
 
+    logger.info(f"[AUTH] Login successful for user: {user.username}")
     user.failed_login_attempts = 0
     user.locked_until = None
     user.last_login_at = now

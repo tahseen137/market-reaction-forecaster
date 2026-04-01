@@ -63,3 +63,15 @@ The CLI seeds baseline demo content on a fresh local database, refreshes validat
 - `GET /api/admin/validation/summary`
 - `GET /api/admin/cassandra/autoresearch`
 - `POST /api/admin/cassandra/autoresearch/run`
+- `POST /api/admin/cassandra/validation/run`
+- `GET /api/admin/cassandra/validation/runs`
+- `GET /api/admin/cassandra/validation/runs/{run_id}`
+
+## Live validation snapshot runner
+
+```bash
+source .venv/bin/activate
+python -m app.validation_cli --reason monday-review --top-calls 5
+```
+
+Artifacts land in `data/uploads/cassandra/validation-runs/` (or your configured uploads dir) as JSON + CSV so the 14-day live-shadow pass can be inspected later.

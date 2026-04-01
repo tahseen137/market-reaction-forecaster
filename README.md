@@ -34,6 +34,7 @@ The launch product is deliberately aggressive:
   - funnel analytics for signup, profile completion, disclosure acknowledgment, watchlists, recommendation views, and checkout starts/completions
   - recommendation snapshot export
   - daily validation reports with shadow-portfolio performance
+  - archived Cassandra live-validation runs (JSON + CSV) for top live calls and shadow portfolio state
   - admin validation dashboard at `/admin/validation`
 - Account-level system status with connector visibility and scheduler state
 - Markdown report exports for recommendations and backtests
@@ -91,12 +92,19 @@ See [.env.example](./.env.example) for the full list.
   - chaos score + predictability horizon
   - applied AutoResearch weight profile
 - AutoResearch loop writes a deterministic artifact to `data/uploads/cassandra/autoresearch-latest.json` (or your configured uploads dir).
-- Run it manually:
+- Live validation runner archives top calls plus shadow-portfolio state to `data/uploads/cassandra/validation-runs/` as JSON + CSV.
+- Run them manually:
 
 ```bash
 source .venv/bin/activate
 python -m app.autoresearch_cli
+python -m app.validation_cli --reason manual-check --top-calls 5
 ```
+
+Useful validation endpoints:
+- `POST /api/admin/cassandra/validation/run`
+- `GET /api/admin/cassandra/validation/runs`
+- `GET /api/admin/cassandra/validation/runs/{run_id}`
 
 ## Tests
 
