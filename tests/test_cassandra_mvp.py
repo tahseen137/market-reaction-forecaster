@@ -1,11 +1,20 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 from sqlalchemy import select
 
 from app.autoresearch import BASELINE_WEIGHT_OVERRIDES, run_autoresearch_loop
-from app.models import RecommendationOutcome, RecommendationSnapshot, Security
+from app.models import DailyPrediction, RecommendationOutcome, RecommendationSnapshot, Security
 from app.scoring import build_base_recommendation
-from app.services import archive_validation_run, load_validation_run_artifact, refresh_validation_report, seed_demo_content
+from app.services import (
+    archive_validation_run,
+    get_recommendation_feed,
+    load_validation_run_artifact,
+    refresh_market_state,
+    refresh_validation_report,
+    seed_demo_content,
+)
 from tests.conftest import acknowledge, login, signup
 
 
@@ -178,3 +187,43 @@ def test_admin_recommendation_detail_bypasses_daily_cache(client):
     assert payload["mirofish_analysis"]["regime"] in {"bullish", "bearish", "cross-current"}
     assert payload["chaos_analysis"]["predictability_horizon_days"] >= 1
     assert payload["weight_profile_name"]
+
+
+def test_refresh_market_state_rebuilds_daily_prediction_cache(session, settings):
+    stale_generated_at = (datetime.now(UTC) - timedelta(days=3)).replace(tzinfo=None)
+    snapshots = list(session.scalars(select(RecommendationSnapshot)))
+    assert snapshots
+    for snapshot in snapshots:
+        snapshot.generated_at = stale_generated_at
+        session.add(snapshot)
+    session.commit()
+
+    public_feed = get_recommendation_feed(session)
+    assert public_feed
+
+    stale_prediction = session.scalars(select(DailyPrediction).where(DailyPrediction.symbol == "NVDA")).first()
+    assert stale_prediction is not None
+    stale_snapshot_id = stale_prediction.recommendation_snapshot_id
+    assert stale_prediction.generated_at == stale_generated_at
+
+    refresh_market_state(session, settings)
+
+    refreshed_prediction = session.scalars(select(DailyPrediction).where(DailyPrediction.symbol == "NVDA")).first()
+    assert refreshed_prediction is not None
+
+    latest_snapshot = session.scalars(
+        select(RecommendationSnapshot)
+        .join(RecommendationSnapshot.security)
+        .where(Security.symbol == "NVDA")
+        .order_by(RecommendationSnapshot.generated_at.desc())
+    ).first()
+    assert latest_snapshot is not None
+    assert latest_snapshot.id != stale_snapshot_id
+    assert refreshed_prediction.recommendation_snapshot_id == latest_snapshot.id
+    assert refreshed_prediction.generated_at == latest_snapshot.generated_at
+    assert refreshed_prediction.generated_at > stale_generated_at
+
+    refreshed_feed = get_recommendation_feed(session)
+    nvda_entry = next(item for item in refreshed_feed if item["symbol"] == "NVDA")
+    assert nvda_entry["from_daily_cache"] is True
+    assert nvda_entry["generated_at"] == latest_snapshot.generated_at

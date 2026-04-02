@@ -279,22 +279,9 @@ def _get_daily_predictions(session: Session, date: str) -> dict[str, DailyPredic
     return {pred.symbol: pred for pred in predictions}
 
 
-def _store_daily_prediction(session: Session, snapshot: RecommendationSnapshot, date: str) -> DailyPrediction:
-    """Store a recommendation snapshot as a daily prediction."""
+def _build_daily_prediction(snapshot: RecommendationSnapshot, date: str) -> DailyPrediction:
     latest_event = snapshot.latest_event
-    
-    # Check if prediction already exists for this date/symbol
-    existing = session.scalars(
-        select(DailyPrediction).where(
-            DailyPrediction.date == date,
-            DailyPrediction.symbol == snapshot.security.symbol
-        )
-    ).first()
-    
-    if existing:
-        return existing
-    
-    prediction = DailyPrediction(
+    return DailyPrediction(
         date=date,
         symbol=snapshot.security.symbol,
         action=snapshot.action,
@@ -310,10 +297,43 @@ def _store_daily_prediction(session: Session, snapshot: RecommendationSnapshot, 
         news_snapshot_at=latest_event.created_at if latest_event else None,
         recommendation_snapshot_id=snapshot.id,
     )
+
+
+def _store_daily_prediction(session: Session, snapshot: RecommendationSnapshot, date: str) -> DailyPrediction:
+    """Store a recommendation snapshot as a daily prediction."""
+    existing = session.scalars(
+        select(DailyPrediction).where(
+            DailyPrediction.date == date,
+            DailyPrediction.symbol == snapshot.security.symbol
+        )
+    ).first()
+
+    if existing:
+        return existing
+
+    prediction = _build_daily_prediction(snapshot, date)
     session.add(prediction)
     session.commit()
     session.refresh(prediction)
     return prediction
+
+
+def _refresh_daily_prediction_cache(
+    session: Session,
+    *,
+    date: str | None = None,
+    snapshots: list[RecommendationSnapshot] | None = None,
+) -> dict[str, DailyPrediction]:
+    target_date = date or _get_today_date()
+    snapshot_list = snapshots if snapshots is not None else _latest_snapshots(session)
+
+    session.query(DailyPrediction).filter(DailyPrediction.date == target_date).delete()  # type: ignore[attr-defined]
+    predictions = [_build_daily_prediction(snapshot, target_date) for snapshot in snapshot_list]
+    if predictions:
+        session.add_all(predictions)
+    session.commit()
+
+    return {prediction.symbol: prediction for prediction in predictions}
 
 
 def _daily_prediction_to_feed_entry(
@@ -1657,11 +1677,15 @@ def refresh_market_state(session: Session, settings: Settings) -> None:
     refreshed_symbols: list[str] = []
     created_events = 0
     benchmark_reference_price = _benchmark_quote_price(settings)
+    refreshed_snapshots: list[RecommendationSnapshot] = []
     for security in list_reference_universe(session):
         refresh_security_quote(session, settings, security)
         created_events += ingest_candidate_events(session, settings, security)
-        rebuild_security_recommendation(session, settings, security, benchmark_reference_price=benchmark_reference_price)
+        refreshed_snapshots.append(
+            rebuild_security_recommendation(session, settings, security, benchmark_reference_price=benchmark_reference_price)
+        )
         refreshed_symbols.append(security.symbol)
+    _refresh_daily_prediction_cache(session, snapshots=refreshed_snapshots)
     rebuild_all_user_recommendations(session)
     backtest = refresh_backtest(session)
     validation_report = refresh_validation_report(session, settings)
